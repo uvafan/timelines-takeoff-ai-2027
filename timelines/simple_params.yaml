@@ -1,0 +1,61 @@
+simulation:
+  n_sims: 5000     # Number of Monte Carlo simulation runs
+  n_steps: 30000   # Maximum simulation steps before timeout
+  dt: 1.0          # Time step size in days
+  current_horizon: 15  # Current time horizon in minutes (point estimate)
+  compute_decrease_date: 2029.0  # End of 2028
+  human_alg_progress_decrease_date: 2029.0  # End of 2028
+  max_simulation_years: 20.0  # Maximum number of years to simulate before timeout
+
+# Plotting style configuration  
+plotting_style:
+  font:
+    family: "monospace"   # Add this line to specify monospace font
+    sizes:
+      axis_labels: 18
+      title: 18
+      main_title: 32
+      ticks: 16
+      legend: 16
+  
+  colors:
+    background: "#FFFEF8"  # Add this line for cream background (255, 250, 240)
+    human:
+      dark: "#484848"
+    default: "#000000"
+
+# Forecaster configurations
+forecasters:
+  eli:
+    name: "Eli (AI 2027 author)"
+    color: "#900000"
+    distributions:
+      h_SC_ci: [1, 14400]  # Months needed for SC
+      T_t_ci: [2.5, 9]        # Horizon doubling time in months
+      cost_speed_ci: [0.5, 30]  # Cost and speed adjustment in months
+      announcement_delay_ci: [0.25, 6]  # Announcement delay in months (1 week to 6 months)
+      present_prog_multiplier_ci: [0.03, 0.3]  # Progress multiplier at present - 1
+      SC_prog_multiplier_ci: [1.5, 40.0]  # Progress multiplier at SC - 1
+      p_superexponential: 0.45  # Probability of superexponential growth
+      p_subexponential: 0.10    # Probability of subexponential growth
+      se_speedup_ci: [0.05, 0.5]    # UNUSED; 80% CI for superexponential speedup (added to 1)
+      sub_slowdown_ci: [0.01, 0.2]  # UNUSED; 80% CI for subexponential slowdown (subtracted from 1)
+      se_doubling_decay_fraction: 0.1     # If superexponential, fraction by which each doubling gets easier
+      sub_doubling_growth_fraction: 0.1   # If subexponential, fraction by which each doubling gets harder
+
+  nikola:
+    name: "Nikola"
+    color: "#003000"
+    distributions:
+      h_SC_ci: [0.1, 24]  # Months needed for SC
+      T_t_ci: [2.5, 9]        # Horizon doubling time in months
+      cost_speed_ci: [0.5, 30]  # Cost and speed adjustment in months
+      announcement_delay_ci: [0.25, 6]  # Announcement delay in months (1 week to 6 months)
+      present_prog_multiplier_ci: [0.03, 0.3]  # Progress multiplier at present - 1
+      SC_prog_multiplier_ci: [1.0, 20.0]  # Progress multiplier at SC - 1
+      p_superexponential: 0.4  # Probability of superexponential growth
+      p_subexponential: 0.10    # Probability of subexponential growth
+      se_speedup_ci: [0.05, 0.5]    # UNUSED; 80% CI for superexponential speedup (added to 1)
+      sub_slowdown_ci: [0.01, 0.2]  # UNUSED; 80% CI for subexponential slowdown (subtracted from 1) 
+      se_doubling_decay_fraction: 0.1     # If superexponential, fraction by which each doubling gets easier
+      sub_doubling_growth_fraction: 0.1   # If subexponential, fraction by which each doubling gets harder
