@@ -190,11 +190,14 @@ def get_compute_rate(t: float, compute_decrease_date: float) -> float:
     """Calculate compute progress rate based on time."""
     return 0.5 if t >= compute_decrease_date else 1.0
 
-def calculate_sc_arrival_year(samples: dict, current_horizon: float, dt: float, compute_decrease_date: float, human_alg_progress_decrease_date: float, max_simulation_years: float) -> np.ndarray:
+def calculate_sc_arrival_year(samples: dict, current_horizon: float, dt: float, compute_decrease_date: float, human_alg_progress_decrease_date: float, max_simulation_years: float, forecaster_config: dict) -> np.ndarray:
     """Calculate time to reach SC incorporating intermediate speedups and compute scaling."""
     # First calculate base time including cost-and-speed adjustment
     base_time_in_months = calculate_base_time(samples, current_horizon)
     n_sims = len(base_time_in_months)
+    
+    # Get algorithmic progress share from forecaster config
+    algorithmic_progress_share = forecaster_config.get("algorithmic_progress_share", 0.5)
     
     # Initialize array for actual times
     ending_times = np.zeros(n_sims)
@@ -221,7 +224,7 @@ def calculate_sc_arrival_year(samples: dict, current_horizon: float, dt: float, 
             # Calculate algorithmic speedup based on intermediate speedup s(interpolate between present and SC rates)
             v_algorithmic = (1 + samples["present_prog_multiplier"][i]) * ((1 + samples["SC_prog_multiplier"][i])/(1 + samples["present_prog_multiplier"][i])) ** progress_fraction
 
-            # adjust algorithmic rate if human alg progress has decreased, in betweene
+            # adjust algorithmic rate if human alg progress has decreased
             if time >= human_alg_progress_decrease_date:
                 only_multiplier = v_algorithmic * 0.5
                 only_additive = v_algorithmic - 0.5
@@ -230,8 +233,8 @@ def calculate_sc_arrival_year(samples: dict, current_horizon: float, dt: float, 
             
             # Get compute rate for current time (not affected by intermediate speedups)
             compute_rate = get_compute_rate(time, compute_decrease_date)
-            # Total rate is mean of algorithmic and compute rates
-            total_rate = (v_algorithmic + compute_rate) / 2
+            # Total rate is weighted average of algorithmic and compute rates
+            total_rate = algorithmic_progress_share * v_algorithmic + (1 - algorithmic_progress_share) * compute_rate
             
             # Update progress and time
             progress += dt * total_rate
@@ -373,7 +376,8 @@ def run_simple_sc_simulation(config_path: str = "simple_params.yaml") -> tuple[p
                 config["simulation"]["dt"],
                 config["simulation"]["compute_decrease_date"],
                 config["simulation"]["human_alg_progress_decrease_date"],
-                config["simulation"]["max_simulation_years"]
+                config["simulation"]["max_simulation_years"],
+                forecaster_config
             )
             
             pbar.update(1)
