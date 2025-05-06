@@ -140,7 +140,7 @@ def get_milestone_samples(config: dict, n_sims: int, correlation: float = 0.7) -
     
     return samples
 
-def run_phase_simulation(gap: float, start_speed: float, end_speed: float, milestone_pair: str = None) -> float:
+def run_phase_simulation(gap: float, start_speed: float, end_speed: float, dt: int) -> float:
     """Run simulation for a single phase with exponential speedup.
     
     Args:
@@ -152,29 +152,29 @@ def run_phase_simulation(gap: float, start_speed: float, end_speed: float, miles
     Returns:
         Calendar days taken to complete the phase
     """
-    dt = 1  # One day timesteps
     calendar_time = 0
     progress = 0
     
     # Cap to prevent overflow
     MAX_CALENDAR_DAYS = 365 * 1000
     
+    speed_ratio = end_speed / start_speed
     while progress < gap:
         # Calculate current speedup based on progress through the phase
         progress_ratio = progress / gap
-        current_speedup = start_speed * (end_speed/start_speed)**progress_ratio
+        current_speedup = start_speed * speed_ratio**progress_ratio
         
         # Make progress at varying speed
         progress += current_speedup * dt
         calendar_time += dt
         
         if calendar_time > MAX_CALENDAR_DAYS:
-            print(f"Warning: Phase duration capped at {MAX_CALENDAR_DAYS/365:.1f} years")
+            # print(f"Warning: Phase duration capped at {MAX_CALENDAR_DAYS/365:.1f} years")
             return MAX_CALENDAR_DAYS
     
     return calendar_time
 
-def run_single_simulation_with_tracking(samples: dict, sim_idx: int) -> tuple[list[datetime], list[float]]:
+def run_single_simulation_with_tracking(samples: dict, sim_idx: int, dt: int) -> tuple[list[datetime], list[float]]:
     """Run a single simulation and track both milestone dates and phase durations."""
     milestone_dates = []
     phase_calendar_days = []
@@ -201,7 +201,7 @@ def run_single_simulation_with_tracking(samples: dict, sim_idx: int) -> tuple[li
             end_speed = samples["speeds"][next_milestone]
         
         # Run simulation for this phase with exponential speedup
-        calendar_days = run_phase_simulation(gap, start_speed, end_speed, milestone_pair)
+        calendar_days = run_phase_simulation(gap, start_speed, end_speed, dt)
         phase_calendar_days.append(calendar_days)
         
         try:
@@ -543,6 +543,7 @@ def run_takeoff_simulation(config_path: str = "params.yaml") -> tuple[plt.Figure
     print("Loading configuration...")
     config = load_config(config_path)
     plotting_style = config["plotting_style"]
+    dt = config["simulation"]["dt"]
     
     # Set up fonts
     fonts = setup_plotting_style(plotting_style)
@@ -556,7 +557,7 @@ def run_takeoff_simulation(config_path: str = "params.yaml") -> tuple[plt.Figure
     all_milestone_dates = []
     all_phase_durations = []
     for i in tqdm(range(config["simulation"]["n_sims"]), desc="Simulations"):
-        milestone_dates, phase_durations = run_single_simulation_with_tracking(samples, i)
+        milestone_dates, phase_durations = run_single_simulation_with_tracking(samples, i, dt)
         all_milestone_dates.append(milestone_dates)
         all_phase_durations.append(phase_durations)
     
