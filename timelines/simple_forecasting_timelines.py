@@ -242,15 +242,16 @@ def calculate_sc_arrival_year(samples: dict, current_horizon: float, dt: float, 
             # Calculate software speedup based on intermediate speedup s(interpolate between present and SC rates)
             software_prog_multiplier = (1 + samples["present_prog_multiplier"][i]) * ((1 + samples["SC_prog_multiplier"][i])/(1 + samples["present_prog_multiplier"][i])) ** progress_fraction
 
-            # Calculate new labor added this period
             # Convert annual growth rate to daily rate for the time step
             daily_growth_rate = (1 + simulation_config["labor_growth_rate"]) ** (dt/250) - 1
+
+            # Calculate new labor added this period
             new_labor = labor_pool * daily_growth_rate
             labor_pool += new_labor
             
-            # Calculate research contribution from new labor
-            research_contribution = ((new_labor ** labor_power) * software_prog_multiplier) / (250/dt)
-            
+            # Calculate research contribution on a yearly basis, then divide
+            research_contribution = ((((labor_pool+1) ** labor_power)-1) * software_prog_multiplier) / (250/dt)
+
             # Add to research stock
             new_research_stock = research_stock + research_contribution
             
@@ -264,9 +265,6 @@ def calculate_sc_arrival_year(samples: dict, current_horizon: float, dt: float, 
             # Using log ratio to properly account for compound growth
             growth_ratio = np.log(1 + actual_growth) / np.log(1 + baseline_growth)
 
-            # Update research stock
-            research_stock = new_research_stock
-            
             # Get compute rate for current time (not affected by intermediate speedups)
             compute_rate = get_compute_rate(time, compute_decrease_date)
             # Total rate is weighted average of software and compute rates
@@ -275,14 +273,10 @@ def calculate_sc_arrival_year(samples: dict, current_horizon: float, dt: float, 
             # Update progress and time
             progress += dt_in_months * total_rate
             time += dt_in_months / 12  # Convert months to years
+            
+            # Update research stock
+            research_stock = new_research_stock
 
-
-            if progress > software_prog_multiplier and not printed:
-                printed=True
-                print("interesting")
-            # import pdb; pdb.set_trace()
-
-        
         # If we hit the time limit, set to max time
         if time >= max_time:
             time = max_time 

@@ -227,29 +227,57 @@ def run_single_scenario(samples: dict, params: dict, forecaster_config: dict) ->
     # Get software progress share from samples
     software_progress_share = samples["initial_software_progress_share"]
     
+    # Initialize labor-based research variables
+    labor_pool = forecaster_config["simulation"]["initial_labor_pool"]
+    research_stock = forecaster_config["simulation"]["initial_research_stock"]
+    labor_power = forecaster_config["simulation"]["labor_power"]
+    
     for i in tqdm(range(len(samples["T_t"])), desc="Running simulations", leave=False):
         # Initialize simulation at current time
         t = params["t_0"] + samples["t_sat"][i]/12  # Convert months to years
         g_t = 0
         
+        # Reset labor and research variables for each simulation
+        current_labor_pool = labor_pool
+        current_research_stock = research_stock
+        
         # Run timesteps
         max_time = 2050.0  # Maximum time to simulate to
         for _ in range(params["n_steps"]):
-            # Calculate software progress rate - add 1 to both rates since they're now lognormal offsets
-            v_software = (1 + samples["v_software_sat"][i]) * ((1 + samples["v_software_SC"][i])/(1 + samples["v_software_sat"][i])) ** (g_t / g_SC[i])
+            # Calculate progress fraction
+            progress_fraction = g_t / g_SC[i]
             
-            # adjust software rate if human alg progress has decreased, in betweene
-            if t >= 2029:
-                only_multiplier = v_software * 0.5
-                only_additive = v_software - 0.5
-                # geometric mean of only_multiplier and only_additive, aggregating between extremes of how AIs/humans could complement
-                v_software = np.sqrt(only_multiplier * only_additive)
+            # Calculate software progress rate based on intermediate speedup (interpolate between present and SC rates)
+            software_prog_multiplier = (1 + samples["v_software_sat"][i]) * ((1 + samples["v_software_SC"][i])/(1 + samples["v_software_sat"][i])) ** progress_fraction
+
+            # Convert annual growth rate to daily rate for the time step
+            daily_growth_rate = (1 + forecaster_config["simulation"]["labor_growth_rate"]) ** (params["dt"]/250) - 1
+
+            # Calculate new labor added this period
+            new_labor = current_labor_pool * daily_growth_rate
+            current_labor_pool += new_labor
+            
+            # Calculate research contribution on a yearly basis, then divide
+            research_contribution = ((((current_labor_pool+1) ** labor_power)-1) * software_prog_multiplier) / (250/params["dt"])
+
+            # Add to research stock
+            new_research_stock = current_research_stock + research_contribution
+            
+            # Calculate actual growth rate (annualized)
+            actual_growth = (new_research_stock / current_research_stock) ** (250/params["dt"]) - 1
+
+            if g_t == 0:
+                baseline_growth = actual_growth
+            
+            # Calculate adjustment factor based on growth rate ratio
+            # Using log ratio to properly account for compound growth
+            growth_ratio = np.log(1 + actual_growth) / np.log(1 + baseline_growth)
 
             # Get compute progress rate
             v_compute = get_v_compute(t)
             
             # Calculate total progress rate using weighted average
-            v_t = software_progress_share[i] * v_software + (1 - software_progress_share[i]) * v_compute
+            v_t = software_progress_share[i] * growth_ratio + (1 - software_progress_share[i]) * v_compute
             
             # Update progress (dt is in days, convert to months by dividing by ~30.5)
             g_t += v_t * (params["dt"]/30.5)
@@ -266,6 +294,9 @@ def run_single_scenario(samples: dict, params: dict, forecaster_config: dict) ->
             if t >= max_time:
                 successful_times.append(max_time)
                 break
+            
+            # Update research stock
+            current_research_stock = new_research_stock
             
     return successful_times
 

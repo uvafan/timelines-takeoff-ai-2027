@@ -1,9 +1,15 @@
 # Shared simulation parameters
 simulation:
-  n_sims: 5000     # Number of Monte Carlo simulation runs
+  n_sims: 500     # Number of Monte Carlo simulation runs
   n_steps: 30000   # Maximum simulation steps before timeout
   t_0: 2025        # Starting year for simulation
   dt: 1.0          # Time step size in days
+  
+  # Labor-based research parameters
+  initial_labor_pool: 1000  # Initial size of labor pool (L)
+  labor_growth_rate: 0.5    # Annual growth rate of labor pool (G)
+  labor_power: 0.3          # Exponent to translate labor increases to overall research progresss (M)
+  initial_research_stock: 50  # Initial stock of research progress years (S)
 
 # Plotting style configuration
 plotting_style:

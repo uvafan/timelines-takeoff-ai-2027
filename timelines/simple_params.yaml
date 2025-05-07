@@ -1,5 +1,5 @@
 simulation:
-  n_sims: 500     # Number of Monte Carlo simulation runs, set to 5000 for full run
+  n_sims: 5000     # Number of Monte Carlo simulation runs, set to 5000 for full run
   n_steps: 30000   # Maximum simulation steps before timeout
   dt: 1.0          # Time step size in days
   current_horizon: 15  # Current time horizon in minutes (point estimate)
