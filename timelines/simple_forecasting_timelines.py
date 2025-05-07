@@ -106,15 +106,27 @@ def get_distribution_samples(config: dict, n_sims: int, correlation: float = 0.7
     )
     samples["SC_prog_multiplier"] = dist.ppf(prog_uniform_samples[:, 1])
     
-    # Sample growth types independently
-    p_super = config["distributions"]["p_superexponential"]
+    # Store the superexponential schedule for later use
+    samples["superexponential_schedule_months"] = config["distributions"]["superexponential_schedule_months"]
+    
+    # Sample subexponential probability
     p_sub = config["distributions"]["p_subexponential"]
     
     # Generate independent uniform samples for growth type
     growth_type = np.random.uniform(0, 1, n_sims)
-    samples["is_superexponential"] = growth_type < p_super
-    samples["is_subexponential"] = (growth_type >= p_super) & (growth_type < (p_super + p_sub))
-    samples["is_exponential"] = ~(samples["is_superexponential"] | samples["is_subexponential"])
+    samples["is_subexponential"] = growth_type > (1 - p_sub)
+    samples["is_exponential"] = ~samples["is_subexponential"]
+    
+    # For each simulation, determine if and when it becomes superexponential
+    samples["superexponential_start_time"] = np.full(n_sims, np.inf)  # Default to never becoming superexponential
+    for i in range(n_sims):
+        if not samples["is_subexponential"][i]:  # Only consider non-subexponential cases
+            # Generate a random number to determine if/when it becomes superexponential
+            for horizon, prob in samples["superexponential_schedule_months"]:
+                if growth_type[i] < prob:
+                    # Store the horizon directly since it's already in months
+                    samples["superexponential_start_time"][i] = horizon
+                    break
     
     # Add growth/decay parameters
     samples["se_doubling_decay_fraction"] = config["distributions"]["se_doubling_decay_fraction"]
@@ -140,35 +152,46 @@ def calculate_base_time(samples: dict, current_horizon: float) -> np.ndarray:
     print(f"  Mean: {np.mean(n_doublings):.2f}")
     print(f"  Std Dev: {np.std(n_doublings):.2f}")
     
-    # Print growth type distribution
-    exp_mask = samples["is_exponential"]
-    se_mask = samples["is_superexponential"]
-    sub_mask = samples["is_subexponential"]
-    
     # Calculate total time based on growth type
     total_time = np.zeros_like(n_doublings)
     
-    # For regular exponential cases
-    exp_mask = samples["is_exponential"]
-    total_time[exp_mask] = n_doublings[exp_mask] * samples["horizon_doubling_time"][exp_mask]
-    
-    # For superexponential cases
-    se_mask = samples["is_superexponential"]
-    if np.any(se_mask):
-        decay = samples["se_doubling_decay_fraction"]
-        first_doubling_time = samples["horizon_doubling_time"][se_mask]
-        n = n_doublings[se_mask]
-        ratio = 1 - decay
-        total_time[se_mask] = first_doubling_time * (1 - ratio**n) / (1 - ratio)
-    
-    # For subexponential cases
-    sub_mask = samples["is_subexponential"]
-    if np.any(sub_mask):
-        growth = samples["sub_doubling_growth_fraction"]
-        first_doubling_time = samples["horizon_doubling_time"][sub_mask]
-        n = n_doublings[sub_mask]
-        ratio = 1 + growth
-        total_time[sub_mask] = first_doubling_time * (ratio**n - 1) / (ratio - 1)
+    # For each simulation, calculate time based on growth type and superexponential transition
+    for i in range(len(n_doublings)):
+        if samples["is_subexponential"][i]:
+            # Subexponential case
+            growth = samples["sub_doubling_growth_fraction"]
+            first_doubling_time = samples["horizon_doubling_time"][i]
+            n = n_doublings[i]
+            ratio = 1 + growth
+            total_time[i] = first_doubling_time * (ratio**n - 1) / (ratio - 1)
+        else:
+            # Start with exponential growth
+            n = n_doublings[i]
+            doubling_time = samples["horizon_doubling_time"][i]
+            
+            # Check if/when it becomes superexponential
+            superexponential_start = samples["superexponential_start_time"][i]
+            if superexponential_start < np.inf:
+                # Calculate how many doublings happen before superexponential transition
+                n_before = np.log2(superexponential_start/h_current)
+                n_before = min(n_before, n)  # Can't exceed total doublings needed
+                
+                # Calculate time for exponential phase
+                time_before = n_before * doubling_time
+                
+                # Calculate remaining doublings after transition
+                n_after = n - n_before
+                if n_after > 0:
+                    # Calculate time for superexponential phase
+                    decay = samples["se_doubling_decay_fraction"]
+                    ratio = 1 - decay
+                    time_after = doubling_time * (1 - ratio**n_after) / (1 - ratio)
+                    total_time[i] = time_before + time_after
+                else:
+                    total_time[i] = time_before
+            else:
+                # Pure exponential case
+                total_time[i] = n * doubling_time
     
     # Add cost and speed adjustment
     total_time += samples["cost_speed"]
@@ -179,6 +202,10 @@ def calculate_base_time(samples: dict, current_horizon: float) -> np.ndarray:
     
     # Print time distribution by growth type
     print("\nTime Distribution by Growth Type:")
+    exp_mask = ~samples["is_subexponential"] & (samples["superexponential_start_time"] == np.inf)
+    se_mask = ~samples["is_subexponential"] & (samples["superexponential_start_time"] < np.inf)
+    sub_mask = samples["is_subexponential"]
+    
     for mask, name in [(exp_mask, "Exponential"), (se_mask, "Superexponential"), (sub_mask, "Subexponential")]:
         if np.any(mask):
             times = total_time[mask]

@@ -133,15 +133,27 @@ def get_distribution_samples(config: dict, n_sims: int, correlation: float = 0.7
     dist = get_lognormal_from_80_ci(*config["distributions"]["d_ci"])
     samples["d"] = dist.ppf(np.random.random(n_sims))  # Already in months
     
-    # Sample growth types independently
-    p_super = config["distributions"]["p_superexponential"]
+    # Store the superexponential schedule for later use
+    samples["superexponential_schedule_months"] = config["distributions"]["superexponential_schedule_months"]
+    
+    # Sample subexponential probability
     p_sub = config["distributions"]["p_subexponential"]
     
     # Generate independent uniform samples for growth type
     growth_type = np.random.uniform(0, 1, n_sims)
-    samples["is_superexponential"] = growth_type < p_super
-    samples["is_subexponential"] = (growth_type >= p_super) & (growth_type < (p_super + p_sub))
-    samples["is_exponential"] = ~(samples["is_superexponential"] | samples["is_subexponential"])
+    samples["is_subexponential"] = growth_type > (1 - p_sub)
+    samples["is_exponential"] = ~samples["is_subexponential"]
+    
+    # For each simulation, determine if and when it becomes superexponential
+    samples["superexponential_start_time"] = np.full(n_sims, np.inf)  # Default to never becoming superexponential
+    for i in range(n_sims):
+        if not samples["is_subexponential"][i]:  # Only consider non-subexponential cases
+            # Generate a random number to determine if/when it becomes superexponential
+            for horizon, prob in samples["superexponential_schedule_months"]:
+                if growth_type[i] < prob:
+                    # Store the horizon directly since it's already in months
+                    samples["superexponential_start_time"][i] = horizon
+                    break
     
     # Add growth/decay parameters
     samples["se_doubling_decay_fraction"] = config["distributions"]["se_doubling_decay_fraction"]
@@ -194,35 +206,41 @@ def calculate_gaps(samples: dict) -> tuple[np.ndarray, np.ndarray]:
     # Calculate horizon gap based on growth type
     g_h = np.zeros_like(n_doublings)
     
-    # For regular exponential cases
-    exp_mask = samples["is_exponential"]
-    g_h[exp_mask] = n_doublings[exp_mask] * samples["horizon_doubling_time"][exp_mask]
-    
-    # For superexponential cases
-    # Each doubling takes (1-decay)^k times as long as the first doubling
-    se_mask = samples["is_superexponential"]
-    if np.any(se_mask):
-        decay = samples["se_doubling_decay_fraction"]
-        first_doubling_time = samples["horizon_doubling_time"][se_mask]
-        n = n_doublings[se_mask]
-        ratio = 1 - decay
-        
-        # Use geometric series sum formula: T * (1-r^n)/(1-r)
-        # where T is first doubling time, r is (1-decay), n is number of doublings
-        g_h[se_mask] = first_doubling_time * (1 - ratio**n) / (1 - ratio)
-    
-    # For subexponential cases
-    # Each doubling takes (1+growth)^k times as long as the first doubling
-    sub_mask = samples["is_subexponential"]
-    if np.any(sub_mask):
-        growth = samples["sub_doubling_growth_fraction"]
-        first_doubling_time = samples["horizon_doubling_time"][sub_mask]
-        n = n_doublings[sub_mask]
-        ratio = 1 + growth
-        
-        # Use geometric series sum formula: T * (r^n-1)/(r-1)
-        # where T is first doubling time, r is (1+growth), n is number of doublings
-        g_h[sub_mask] = first_doubling_time * (ratio**n - 1) / (ratio - 1)
+    # For each simulation, determine if it becomes superexponential during the gap
+    for i in range(len(n_doublings)):
+        if samples["is_subexponential"][i]:
+            # For subexponential cases
+            # Each doubling takes (1+growth)^k times as long as the first doubling
+            growth = samples["sub_doubling_growth_fraction"]
+            first_doubling_time = samples["horizon_doubling_time"][i]
+            n = n_doublings[i]
+            ratio = 1 + growth
+            
+            # Use geometric series sum formula: T * (r^n-1)/(r-1)
+            # where T is first doubling time, r is (1+growth), n is number of doublings
+            g_h[i] = first_doubling_time * (ratio**n - 1) / (ratio - 1)
+        else:
+            # For non-subexponential cases, check if/when it becomes superexponential
+            superexponential_start = samples["superexponential_start_time"][i]
+            if superexponential_start < np.inf:
+                # Calculate how many doublings happen before superexponential transition
+                doublings_before = np.log2(superexponential_start/samples["h_sat"][i])
+                doublings_before = min(doublings_before, n_doublings[i])
+                doublings_after = n_doublings[i] - doublings_before
+                
+                # Calculate time for exponential phase
+                first_doubling_time = samples["horizon_doubling_time"][i]
+                g_h[i] = first_doubling_time * doublings_before
+                
+                # Calculate time for superexponential phase
+                if doublings_after > 0:
+                    decay = samples["se_doubling_decay_fraction"]
+                    ratio = 1 - decay
+                    # Use geometric series sum formula for remaining doublings
+                    g_h[i] += first_doubling_time * (1 - ratio**doublings_after) / (1 - ratio)
+            else:
+                # Pure exponential case
+                g_h[i] = samples["horizon_doubling_time"][i] * n_doublings[i]
     
     # Calculate total algorithmic gap including all slowdowns
     A_values = list(samples["A_values"].values())
