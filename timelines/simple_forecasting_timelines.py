@@ -45,6 +45,19 @@ def get_distribution_samples(config: dict, n_sims: int, correlation: float = 0.7
     # Convert to uniform using the probability integral transform
     uniform_samples = norm.cdf(normal_samples)
     
+    # Sample initial software progress share from normal distribution
+    lower, upper = config["initial_software_progress_share_ci"]
+    # Convert 80% CI to normal distribution parameters
+    z_low = -1.28  # norm.ppf(0.1)
+    z_high = 1.28  # norm.ppf(0.9)
+    mean = (lower + upper) / 2
+    std = (upper - lower) / (z_high - z_low)
+    # Generate samples and clip to [0.1, 0.9]
+    samples["initial_software_progress_share"] = np.clip(
+        np.random.normal(mean, std, n_sims),
+        0.1, 0.9
+    )
+    
     # Sample horizon length needed for SC (in hours) independently
     dist = get_lognormal_from_80_ci(
         config["distributions"]["h_SC_ci"][0],
@@ -196,8 +209,8 @@ def calculate_sc_arrival_year(samples: dict, current_horizon: float, dt: float, 
     base_time_in_months = calculate_base_time(samples, current_horizon)
     n_sims = len(base_time_in_months)
     
-    # Get algorithmic progress share from forecaster config
-    algorithmic_progress_share = forecaster_config.get("algorithmic_progress_share", 0.5)
+    # Get software progress share from samples
+    software_progress_share = samples["initial_software_progress_share"]
     
     # Initialize array for actual times
     ending_times = np.zeros(n_sims)
@@ -221,20 +234,20 @@ def calculate_sc_arrival_year(samples: dict, current_horizon: float, dt: float, 
             # Calculate progress fraction
             progress_fraction = progress / base_time_in_months[i]
             
-            # Calculate algorithmic speedup based on intermediate speedup s(interpolate between present and SC rates)
-            v_algorithmic = (1 + samples["present_prog_multiplier"][i]) * ((1 + samples["SC_prog_multiplier"][i])/(1 + samples["present_prog_multiplier"][i])) ** progress_fraction
+            # Calculate software speedup based on intermediate speedup s(interpolate between present and SC rates)
+            v_software = (1 + samples["present_prog_multiplier"][i]) * ((1 + samples["SC_prog_multiplier"][i])/(1 + samples["present_prog_multiplier"][i])) ** progress_fraction
 
-            # adjust algorithmic rate if human alg progress has decreased
+            # adjust software rate if human alg progress has decreased
             if time >= human_alg_progress_decrease_date:
-                only_multiplier = v_algorithmic * 0.5
-                only_additive = v_algorithmic - 0.5
+                only_multiplier = v_software * 0.5
+                only_additive = v_software - 0.5
                 # geometric mean of only_multiplier and only_additive, aggregating between extremes of how AIs/humans could complement
-                v_algorithmic = np.sqrt(only_multiplier * only_additive)
+                v_software = np.sqrt(only_multiplier * only_additive)
             
             # Get compute rate for current time (not affected by intermediate speedups)
             compute_rate = get_compute_rate(time, compute_decrease_date)
-            # Total rate is weighted average of algorithmic and compute rates
-            total_rate = algorithmic_progress_share * v_algorithmic + (1 - algorithmic_progress_share) * compute_rate
+            # Total rate is weighted average of software and compute rates
+            total_rate = software_progress_share[i] * v_software + (1 - software_progress_share[i]) * compute_rate
             
             # Update progress and time
             progress += dt * total_rate

@@ -72,6 +72,19 @@ def get_distribution_samples(config: dict, n_sims: int, correlation: float = 0.7
     samples = {}
     idx = 0
     
+    # Sample initial software progress share from normal distribution
+    lower, upper = config["initial_software_progress_share_ci"]
+    # Convert 80% CI to normal distribution parameters
+    z_low = -1.28  # norm.ppf(0.1)
+    z_high = 1.28  # norm.ppf(0.9)
+    mean = (lower + upper) / 2
+    std = (upper - lower) / (z_high - z_low)
+    # Generate samples and clip to [0.1, 0.9]
+    samples["initial_software_progress_share"] = np.clip(
+        np.random.normal(mean, std, n_sims),
+        0.1, 0.9
+    )
+    
     # Sample h_sat independently
     dist = get_lognormal_from_80_ci(
         config["distributions"]["h_sat_ci"][0],  # In hours
@@ -87,17 +100,17 @@ def get_distribution_samples(config: dict, n_sims: int, correlation: float = 0.7
     samples["h_SC"] = dist.ppf(np.random.random(n_sims))  # Already in months
 
     # Generate separate correlated samples for progress multipliers
-    n_prog_vars = 2  # v_algorithmic_sat, v_algorithmic_SC
+    n_prog_vars = 2  # v_software_sat, v_software_SC
     prog_corr_matrix = np.array([[1.0, correlation], [correlation, 1.0]])
     prog_normal_samples = np.random.multivariate_normal(np.zeros(n_prog_vars), prog_corr_matrix, size=n_sims)
     prog_uniform_samples = norm.cdf(prog_normal_samples)
     
-    # Sample v_algorithmic variables with correlation to each other only
+    # Sample v_software variables with correlation to each other only
     dist = get_lognormal_from_80_ci(*config["distributions"]["v_algorithmic_sat_ci"])
-    samples["v_algorithmic_sat"] = dist.ppf(prog_uniform_samples[:, 0])
+    samples["v_software_sat"] = dist.ppf(prog_uniform_samples[:, 0])
     
     dist = get_lognormal_from_80_ci(*config["distributions"]["v_algorithmic_SC_ci"])
-    samples["v_algorithmic_SC"] = dist.ppf(prog_uniform_samples[:, 1])
+    samples["v_software_SC"] = dist.ppf(prog_uniform_samples[:, 1])
 
     # Sample T_t with correlation
     dist = get_lognormal_from_80_ci(*config["distributions"]["T_t_ci"])
@@ -206,10 +219,13 @@ def calculate_gaps(samples: dict) -> tuple[np.ndarray, np.ndarray]:
     
     return g_h, g_SC
 
-def run_single_scenario(samples: dict, params: dict) -> list[float]:
+def run_single_scenario(samples: dict, params: dict, forecaster_config: dict) -> list[float]:
     """Run simulation for a single scenario configuration."""
     successful_times = []
     _, g_SC = calculate_gaps(samples)  # Use sampled h_sat values
+    
+    # Get software progress share from samples
+    software_progress_share = samples["initial_software_progress_share"]
     
     for i in tqdm(range(len(samples["T_t"])), desc="Running simulations", leave=False):
         # Initialize simulation at current time
@@ -219,21 +235,21 @@ def run_single_scenario(samples: dict, params: dict) -> list[float]:
         # Run timesteps
         max_time = 2050.0  # Maximum time to simulate to
         for _ in range(params["n_steps"]):
-            # Calculate algorithmic progress rate - add 1 to both rates since they're now lognormal offsets
-            v_algorithmic = (1 + samples["v_algorithmic_sat"][i]) * ((1 + samples["v_algorithmic_SC"][i])/(1 + samples["v_algorithmic_sat"][i])) ** (g_t / g_SC[i])
+            # Calculate software progress rate - add 1 to both rates since they're now lognormal offsets
+            v_software = (1 + samples["v_software_sat"][i]) * ((1 + samples["v_software_SC"][i])/(1 + samples["v_software_sat"][i])) ** (g_t / g_SC[i])
             
-            # adjust algorithmic rate if human alg progress has decreased, in betweene
+            # adjust software rate if human alg progress has decreased, in betweene
             if t >= 2029:
-                only_multiplier = v_algorithmic * 0.5
-                only_additive = v_algorithmic - 0.5
+                only_multiplier = v_software * 0.5
+                only_additive = v_software - 0.5
                 # geometric mean of only_multiplier and only_additive, aggregating between extremes of how AIs/humans could complement
-                v_algorithmic = np.sqrt(only_multiplier * only_additive)
+                v_software = np.sqrt(only_multiplier * only_additive)
 
             # Get compute progress rate
             v_compute = get_v_compute(t)
             
-            # Calculate total progress rate (mean of compute and algorithmic)
-            v_t = (v_compute + v_algorithmic) / 2
+            # Calculate total progress rate using weighted average
+            v_t = software_progress_share[i] * v_software + (1 - software_progress_share[i]) * v_compute
             
             # Update progress (dt is in days, convert to months by dividing by ~30.5)
             g_t += v_t * (params["dt"]/30.5)
@@ -522,10 +538,10 @@ def create_distribution_plots(all_forecaster_samples: dict, config: dict, plotti
             {"key": "T_t", "unit": "months"},
         "Time to\nSaturation (t_sat)":
             {"key": "t_sat", "unit": "days"},
-        "Algorithmic Progress Rate at\nSaturation (v_algorithmic_sat)":
-            {"key": "v_algorithmic_sat", "unit": "x 2024 rate"},
-        "Algorithmic Progress Rate at\nSC (v_algorithmic_SC)":
-            {"key": "v_algorithmic_SC", "unit": "x 2024 rate"},
+        "Software Progress Rate at\nSaturation (v_software_sat)":
+            {"key": "v_software_sat", "unit": "x 2024 rate"},
+        "Software Progress Rate at\nSC (v_software_SC)":
+            {"key": "v_software_SC", "unit": "x 2024 rate"},
         "Horizon Length at\nSC (h_SC)":
             {"key": "h_SC", "unit": "months"},
         "Delay to become\npublic (d)":
@@ -863,7 +879,7 @@ def run_and_plot_are_scenarios(config_path: str = "params.yaml") -> tuple[plt.Fi
         all_forecaster_samples[name] = samples
         
         # Run simulation
-        results = run_single_scenario(samples, sim_params)
+        results = run_single_scenario(samples, sim_params, forecaster_config)
         all_forecaster_headline_results[name] = results
     
     print("\nGenerating plots...")

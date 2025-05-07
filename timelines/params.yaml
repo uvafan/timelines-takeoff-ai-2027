@@ -24,8 +24,9 @@ plotting_style:
 # Active forecasters configuration
 forecasters:
   eli:
-     name: "Eli (AI 2027 author)"           # Your display name in plots. SAME means same as Nikola.
+     name: "Eli"           # Your display name in plots. SAME means same as Nikola.
      color: "#900000"      # Pick a unique color (hex code)
+     initial_software_progress_share_ci: [0.2, 0.85]  # 80% CI for initial software progress share
      distributions:
        h_sat_ci: [0.5, 15.0]     # 80% CI for horizon at RE-Bench saturation in hours
        h_SC_ci: [0.05, 6]  # 80% initial time horizon needed to achieve SC once it's increased via other gaps being crossed, in months
@@ -34,7 +35,7 @@ forecasters:
        v_algorithmic_SC_ci: [1.5, 40.0]   # Progress multiplier at SC - 1
        t_sat_ci: ["2025-09-01", "2031-01-01"]  # 80% CI for date when capability saturates
        d_ci: [0.25, 6]                        # SAME: Announcement delay in months
-       p_superexponential: 0.45             # Probability that horizon length grows superexponential
+       p_superexponential: 0.9             # Probability that horizon length grows superexponential
        p_subexponential: 0.1               # Probability that horizon length grows subexponentially
        se_doubling_decay_fraction: 0.1     # If superexponential, fraction by which each doubling gets easier
        sub_doubling_growth_fraction: 0.1   # If subexponential, fraction by which each doubling gets harder
@@ -46,33 +47,11 @@ forecasters:
        specialization: [0.0, 0.5, 6]       # Specialized skill requirements
        cost_and_speed: [0.0, 1, 48]        # Computational constraint
        other: [0.0, 1, 30]                 # Other algorithmic challenges
-  nikola:
-    name: "Nikola"         # Display name in plots and legends
-    color: "#003000"       # Unique color for this forecaster's data
-    distributions:
-      h_sat_ci: [0.5, 12.0]     # 80% CI for horizon at RE-Bench saturation in hours
-      h_SC_ci: [0.05, 6]  # 80% CI for initial time horizon needed to achieve SC once it's increased via other gaps being crossed, in months
-      T_t_ci: [0.5, 18.0]        # 80% CI for base horizon doubling time in months
-      v_algorithmic_sat_ci: [0.05, 0.6]   # 80% CI for algorithmic progress rate at saturation - 1
-      v_algorithmic_SC_ci: [1.0, 20.0]   # 80% CI for algorithmic progress rate at SC capability - 1
-      t_sat_ci: ["2025-08-01", "2026-11-01"]  # 80% CI for date when capability saturates
-      d_ci: [0.25, 6]                        # 80% CI for announcement delay in months
-      p_superexponential: 0.4             # Probability that horizon length grows superexponentially (vs exponential)
-      p_subexponential: 0.1              # Probability that horizon length grows subexponentially (vs exponential)
-      se_doubling_decay_fraction: 0.1     # If superexponential, fraction by which each doubling gets easier
-      sub_doubling_growth_fraction: 0.1   # If subexponential, fraction by which each doubling gets harder
-    algorithmic_slowdowns:
-      # Format for each slowdown: [Probability of no slowdown, Lower CI in months, Upper CI in months]
-      complex_engineering: [0.0, 0.5, 18]    # Delays from increased engineering complexity
-      feedback_loops: [0.0, 0.5, 18]         # Delays from working without feedback
-      project_coordination: [0.0, 0.5, 3]    # Delays from coordinating multiple projects
-      specialization: [0.0, 0.1, 2]        # Delays from need for specialized AI skills
-      cost_and_speed: [0.0, 1, 36]         # Delays from computational costs and speed
-      other: [0.0, 0.5, 18]                 # Other potential algorithmic delays
-  futuresearch:
-    name: "FutureSearch"        # Your display name in plots
-    color: "#4287f5"        # Pick a unique color (hex code)
-    distributions:
+  eli_software_uncertainty:
+     name: "Eli_software_uncertainty"           # Your display name in plots. SAME means same as Nikola.
+     color: "#003000"     # Pick a unique color (hex code)
+     initial_software_progress_share_ci: [0.2, 0.85]  # 80% CI for initial software progress share
+     distributions:
        h_sat_ci: [0.5, 15.0]     # 80% CI for horizon at RE-Bench saturation in hours
        h_SC_ci: [0.05, 6]  # 80% initial time horizon needed to achieve SC once it's increased via other gaps being crossed, in months
        T_t_ci: [0.5, 18.0]          # Base doubling time in months
@@ -80,19 +59,67 @@ forecasters:
        v_algorithmic_SC_ci: [1.5, 40.0]   # Progress multiplier at SC - 1
        t_sat_ci: ["2025-09-01", "2031-01-01"]  # 80% CI for date when capability saturates
        d_ci: [0.25, 6]                        # SAME: Announcement delay in months
-       b_ci: [1, 24]                       # SAME: Non-algorithmic slowdowns in months
-       p_superexponential: 0.45             # Probability that horizon length grows superexponential
+       p_superexponential: 0.9             # Probability that horizon length grows superexponential
        p_subexponential: 0.1               # Probability that horizon length grows subexponentially
        se_doubling_decay_fraction: 0.1     # If superexponential, fraction by which each doubling gets easier
        sub_doubling_growth_fraction: 0.1   # If subexponential, fraction by which each doubling gets harder
-    algorithmic_slowdowns:
-      # Format: [P(no slowdown), Lower bound months, Upper bound months]
-      complex_engineering: [0.0, 2.4, 48]    # Engineering complexity delays
-      cost_and_speed: [0.0, 4.5, 36]        # Computational constraints
-      feedback_loops: [0.0, 1.7, 58]        # Working without feedback
-      project_coordination: [0.0, 0.7, 5.3]    # Project coordination overhead
-      specialization: [0.0, 0.5, 4.7]       # Specialized skill requirements
-      other: [0.0, 5.0, 100]                 # Other algorithmic challenges      
+     algorithmic_slowdowns:
+       # Format: [P(no slowdown), Lower bound months, Upper bound months]
+       complex_engineering: [0.0, 0.5, 18]    # Engineering complexity delays
+       feedback_loops: [0.0, 0.8, 45]     # Working without feedback
+       project_coordination: [0.0, 0.5, 4]    # Project coordination overhead
+       specialization: [0.0, 0.5, 6]       # Specialized skill requirements
+       cost_and_speed: [0.0, 1, 48]        # Computational constraint
+       other: [0.0, 1, 30]                 # Other algorithmic challenges
+  # nikola:
+  #   name: "Nikola"         # Display name in plots and legends
+  #   color: "#003000"       # Unique color for this forecaster's data
+  #   algorithmic_progress_share: 0.5  # Share of total progress attributed to algorithmic improvements (vs compute)
+  #   distributions:
+  #     h_sat_ci: [0.5, 12.0]     # 80% CI for horizon at RE-Bench saturation in hours
+  #     h_SC_ci: [0.05, 6]  # 80% CI for initial time horizon needed to achieve SC once it's increased via other gaps being crossed, in months
+  #     T_t_ci: [0.5, 18.0]        # 80% CI for base horizon doubling time in months
+  #     v_algorithmic_sat_ci: [0.05, 0.6]   # 80% CI for algorithmic progress rate at saturation - 1
+  #     v_algorithmic_SC_ci: [1.0, 20.0]   # 80% CI for algorithmic progress rate at SC capability - 1
+  #     t_sat_ci: ["2025-08-01", "2026-11-01"]  # 80% CI for date when capability saturates
+  #     d_ci: [0.25, 6]                        # 80% CI for announcement delay in months
+  #     p_superexponential: 0.4             # Probability that horizon length grows superexponentially (vs exponential)
+  #     p_subexponential: 0.1              # Probability that horizon length grows subexponentially (vs exponential)
+  #     se_doubling_decay_fraction: 0.1     # If superexponential, fraction by which each doubling gets easier
+  #     sub_doubling_growth_fraction: 0.1   # If subexponential, fraction by which each doubling gets harder
+  #   algorithmic_slowdowns:
+  #     # Format for each slowdown: [Probability of no slowdown, Lower CI in months, Upper CI in months]
+  #     complex_engineering: [0.0, 0.5, 18]    # Delays from increased engineering complexity
+  #     feedback_loops: [0.0, 0.5, 18]         # Delays from working without feedback
+  #     project_coordination: [0.0, 0.5, 3]    # Delays from coordinating multiple projects
+  #     specialization: [0.0, 0.1, 2]        # Delays from need for specialized AI skills
+  #     cost_and_speed: [0.0, 1, 36]         # Delays from computational costs and speed
+  #     other: [0.0, 0.5, 18]                 # Other potential algorithmic delays
+  # futuresearch:
+  #   name: "FutureSearch"        # Your display name in plots
+  #   color: "#4287f5"        # Pick a unique color (hex code)
+  #   algorithmic_progress_share: 0.5  # Share of total progress attributed to algorithmic improvements (vs compute)
+  #   distributions:
+  #      h_sat_ci: [0.5, 15.0]     # 80% CI for horizon at RE-Bench saturation in hours
+  #      h_SC_ci: [0.05, 6]  # 80% initial time horizon needed to achieve SC once it's increased via other gaps being crossed, in months
+  #      T_t_ci: [0.5, 18.0]          # Base doubling time in months
+  #      v_algorithmic_sat_ci: [0.05, 0.6]   # Progress multiplier at saturation - 1
+  #      v_algorithmic_SC_ci: [1.5, 40.0]   # Progress multiplier at SC - 1
+  #      t_sat_ci: ["2025-09-01", "2031-01-01"]  # 80% CI for date when capability saturates
+  #      d_ci: [0.25, 6]                        # SAME: Announcement delay in months
+  #      b_ci: [1, 24]                       # SAME: Non-algorithmic slowdowns in months
+  #      p_superexponential: 0.45             # Probability that horizon length grows superexponential
+  #      p_subexponential: 0.1               # Probability that horizon length grows subexponentially
+  #      se_doubling_decay_fraction: 0.1     # If superexponential, fraction by which each doubling gets easier
+  #      sub_doubling_growth_fraction: 0.1   # If subexponential, fraction by which each doubling gets harder
+  #   algorithmic_slowdowns:
+  #     # Format: [P(no slowdown), Lower bound months, Upper bound months]
+  #     complex_engineering: [0.0, 2.4, 48]    # Engineering complexity delays
+  #     cost_and_speed: [0.0, 4.5, 36]        # Computational constraints
+  #     feedback_loops: [0.0, 1.7, 58]        # Working without feedback
+  #     project_coordination: [0.0, 0.7, 5.3]    # Project coordination overhead
+  #     specialization: [0.0, 0.5, 4.7]       # Specialized skill requirements
+  #     other: [0.0, 5.0, 100]                 # Other algorithmic challenges      
   # daniel:
   #   name: "Daniel"
   #   color: "#FF5733"       # Chosen unique color for Daniel

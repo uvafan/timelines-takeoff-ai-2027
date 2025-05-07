@@ -1,5 +1,5 @@
 simulation:
-  n_sims: 1000     # Number of Monte Carlo simulation runs
+  n_sims: 5000     # Number of Monte Carlo simulation runs, set to 5000 for full run
   n_steps: 30000   # Maximum simulation steps before timeout
   dt: 1.0          # Time step size in days
   current_horizon: 15  # Current time horizon in minutes (point estimate)
@@ -26,10 +26,44 @@ plotting_style:
 
 # Forecaster configurations
 forecasters:
-  eli_exp_only:
-    name: "Eli_exp_only"
-    color: "#900000"
-    algorithmic_progress_share: 0.5  # Share of total progress attributed to algorithmic improvements (vs compute)
+  eli_include_super:
+    name: "Eli_include_super"
+    color: "#900000"  
+    initial_software_progress_share_ci: [0.55, 0.55]  # 80% CI for initial software progress share
+    distributions:
+      h_SC_ci: [1, 14400]  # Months needed for SC
+      T_t_ci: [2.5, 9]        # Horizon doubling time in months
+      cost_speed_ci: [0.5, 30]  # Cost and speed adjustment in months
+      announcement_delay_ci: [0.25, 6]  # Announcement delay in months (1 week to 6 months)
+      present_prog_multiplier_ci: [0.03, 0.3]  # Progress multiplier at present - 1
+      SC_prog_multiplier_ci: [1.5, 40.0]  # Progress multiplier at SC - 1
+      p_superexponential: 0.45  # Probability of superexponential growth
+      p_subexponential: 0.10    # Probability of subexponential growth
+      se_speedup_ci: [0.05, 0.5]    # UNUSED; 80% CI for superexponential speedup (added to 1)
+      sub_slowdown_ci: [0.01, 0.2]  # UNUSED; 80% CI for subexponential slowdown (subtracted from 1)
+      se_doubling_decay_fraction: 0.1     # If superexponential, fraction by which each doubling gets easier
+      sub_doubling_growth_fraction: 0.1   # If subexponential, fraction by which each doubling gets harder
+  eli_include_super_sotware_uncertainty:
+    name: "Eli_include_super_sotware_uncertainty"
+    color: "#003000" 
+    initial_software_progress_share_ci: [0.2, 0.85]  # 80% CI for initial software progress share
+    distributions:
+      h_SC_ci: [1, 14400]  # Months needed for SC
+      T_t_ci: [2.5, 9]        # Horizon doubling time in months
+      cost_speed_ci: [0.5, 30]  # Cost and speed adjustment in months
+      announcement_delay_ci: [0.25, 6]  # Announcement delay in months (1 week to 6 months)
+      present_prog_multiplier_ci: [0.03, 0.3]  # Progress multiplier at present - 1
+      SC_prog_multiplier_ci: [1.5, 40.0]  # Progress multiplier at SC - 1
+      p_superexponential: 0.45  # Probability of superexponential growth
+      p_subexponential: 0.10    # Probability of subexponential growth
+      se_speedup_ci: [0.05, 0.5]    # UNUSED; 80% CI for superexponential speedup (added to 1)
+      sub_slowdown_ci: [0.01, 0.2]  # UNUSED; 80% CI for subexponential slowdown (subtracted from 1)
+      se_doubling_decay_fraction: 0.1     # If superexponential, fraction by which each doubling gets easier
+      sub_doubling_growth_fraction: 0.1   # If subexponential, fraction by which each doubling gets harder
+  eli_no_super:
+    name: "Eli_no_super"
+    color: "#4287f5"
+    initial_software_progress_share_ci: [0.55, 0.55]  # 80% CI for initial software progress share
     distributions:
       h_SC_ci: [1, 14400]  # Months needed for SC
       T_t_ci: [2.5, 9]        # Horizon doubling time in months
@@ -38,16 +72,15 @@ forecasters:
       present_prog_multiplier_ci: [0.03, 0.3]  # Progress multiplier at present - 1
       SC_prog_multiplier_ci: [1.5, 40.0]  # Progress multiplier at SC - 1
       p_superexponential: 0  # Probability of superexponential growth
-      p_subexponential: 0    # Probability of subexponential growth
+      p_subexponential: 0.1    # Probability of subexponential growth
       se_speedup_ci: [0.05, 0.5]    # UNUSED; 80% CI for superexponential speedup (added to 1)
       sub_slowdown_ci: [0.01, 0.2]  # UNUSED; 80% CI for subexponential slowdown (subtracted from 1)
       se_doubling_decay_fraction: 0.1     # If superexponential, fraction by which each doubling gets easier
       sub_doubling_growth_fraction: 0.1   # If subexponential, fraction by which each doubling gets harder
-
-  eli_exp_only_33:
-    name: "Eli_exp_only_33"
-    color: "#003000"
-    algorithmic_progress_share: 0.33  # Share of total progress attributed to algorithmic improvements (vs compute)
+  eli_no_super_sotware_uncertainty:
+    name: "Eli_no_super_sotware_uncertainty"
+    color: "#FF5733"
+    initial_software_progress_share_ci: [0.2, 0.85]  # 80% CI for initial software progress share
     distributions:
       h_SC_ci: [1, 14400]  # Months needed for SC
       T_t_ci: [2.5, 9]        # Horizon doubling time in months
@@ -56,48 +89,11 @@ forecasters:
       present_prog_multiplier_ci: [0.03, 0.3]  # Progress multiplier at present - 1
       SC_prog_multiplier_ci: [1.5, 40.0]  # Progress multiplier at SC - 1
       p_superexponential: 0  # Probability of superexponential growth
-      p_subexponential: 0    # Probability of subexponential growth
+      p_subexponential: 0.1    # Probability of subexponential growth
       se_speedup_ci: [0.05, 0.5]    # UNUSED; 80% CI for superexponential speedup (added to 1)
       sub_slowdown_ci: [0.01, 0.2]  # UNUSED; 80% CI for subexponential slowdown (subtracted from 1)
       se_doubling_decay_fraction: 0.1     # If superexponential, fraction by which each doubling gets easier
       sub_doubling_growth_fraction: 0.1   # If subexponential, fraction by which each doubling gets harder
-  
-  eli_exp_only_0:
-      name: "Eli_exp_only_0"
-      color: "#4287f5"
-      algorithmic_progress_share: 0  # Share of total progress attributed to algorithmic improvements (vs compute)
-      distributions:
-        h_SC_ci: [1, 14400]  # Months needed for SC
-        T_t_ci: [2.5, 9]        # Horizon doubling time in months
-        cost_speed_ci: [0.5, 30]  # Cost and speed adjustment in months
-        announcement_delay_ci: [0.25, 6]  # Announcement delay in months (1 week to 6 months)
-        present_prog_multiplier_ci: [0.03, 0.3]  # Progress multiplier at present - 1
-        SC_prog_multiplier_ci: [1.5, 40.0]  # Progress multiplier at SC - 1
-        p_superexponential: 0  # Probability of superexponential growth
-        p_subexponential: 0    # Probability of subexponential growth
-        se_speedup_ci: [0.05, 0.5]    # UNUSED; 80% CI for superexponential speedup (added to 1)
-        sub_slowdown_ci: [0.01, 0.2]  # UNUSED; 80% CI for subexponential slowdown (subtracted from 1)
-        se_doubling_decay_fraction: 0.1     # If superexponential, fraction by which each doubling gets easier
-        sub_doubling_growth_fraction: 0.1   # If subexponential, fraction by which each doubling gets harder
-
-  # eli:
-  #   name: "Eli (AI 2027 author)"
-  #   color: "#900000"
-  #   algorithmic_progress_share: 0.5  # Share of total progress attributed to algorithmic improvements (vs compute)
-  #   distributions:
-  #     h_SC_ci: [1, 14400]  # Months needed for SC
-  #     T_t_ci: [2.5, 9]        # Horizon doubling time in months
-  #     cost_speed_ci: [0.5, 30]  # Cost and speed adjustment in months
-  #     announcement_delay_ci: [0.25, 6]  # Announcement delay in months (1 week to 6 months)
-  #     present_prog_multiplier_ci: [0.03, 0.3]  # Progress multiplier at present - 1
-  #     SC_prog_multiplier_ci: [1.5, 40.0]  # Progress multiplier at SC - 1
-  #     p_superexponential: 0.45  # Probability of superexponential growth
-  #     p_subexponential: 0.10    # Probability of subexponential growth
-  #     se_speedup_ci: [0.05, 0.5]    # UNUSED; 80% CI for superexponential speedup (added to 1)
-  #     sub_slowdown_ci: [0.01, 0.2]  # UNUSED; 80% CI for subexponential slowdown (subtracted from 1)
-  #     se_doubling_decay_fraction: 0.1     # If superexponential, fraction by which each doubling gets easier
-  #     sub_doubling_growth_fraction: 0.1   # If subexponential, fraction by which each doubling gets harder
-
   # nikola:
   #   name: "Nikola"
   #   color: "#003000"
