@@ -55,7 +55,7 @@ def weighted_geometric_mean(values, weights):
 def get_distribution_samples(config: dict, n_sims: int, correlation: float = 0.7) -> dict:
     """Generate correlated samples from all input distributions."""
     # First generate correlated standard normal variables
-    n_vars = 3 + len(config["algorithmic_slowdowns"]) + 1  # Core params (excluding h_sat, h_SC, d, v_algorithmic vars) + A_values + superexponential inverse
+    n_vars = 3 + len(config["algorithmic_slowdowns"])  # Core params (excluding h_sat, h_SC, d, v_algorithmic vars) + A_values
     
     # Create correlation matrix (all pairs have same correlation)
     corr_matrix = np.full((n_vars, n_vars), correlation)
@@ -112,9 +112,9 @@ def get_distribution_samples(config: dict, n_sims: int, correlation: float = 0.7
     dist = get_lognormal_from_80_ci(*config["distributions"]["v_algorithmic_SC_ci"])
     samples["v_software_SC"] = dist.ppf(prog_uniform_samples[:, 1])
 
-    # Sample T_t with correlation
-    dist = get_lognormal_from_80_ci(*config["distributions"]["T_t_ci"])
-    samples["T_t"] = dist.ppf(uniform_samples[:, idx])
+    # Sample horizon_doubling_time with correlation
+    dist = get_lognormal_from_80_ci(*config["distributions"]["horizon_doubling_time_ci"])
+    samples["horizon_doubling_time"] = dist.ppf(uniform_samples[:, idx])
     idx += 1
 
     # Handle t_sat as dates
@@ -133,12 +133,15 @@ def get_distribution_samples(config: dict, n_sims: int, correlation: float = 0.7
     dist = get_lognormal_from_80_ci(*config["distributions"]["d_ci"])
     samples["d"] = dist.ppf(np.random.random(n_sims))  # Already in months
     
-    # Add growth type parameters with correlation for superexponential
-    growth_type = uniform_samples[:, idx]
-    samples["is_superexponential"] = growth_type < config["distributions"]["p_superexponential"]
-    samples["is_subexponential"] = (growth_type >= config["distributions"]["p_superexponential"]) & (growth_type < (config["distributions"]["p_superexponential"] + config["distributions"]["p_subexponential"]))
+    # Sample growth types independently
+    p_super = config["distributions"]["p_superexponential"]
+    p_sub = config["distributions"]["p_subexponential"]
+    
+    # Generate independent uniform samples for growth type
+    growth_type = np.random.uniform(0, 1, n_sims)
+    samples["is_superexponential"] = growth_type < p_super
+    samples["is_subexponential"] = (growth_type >= p_super) & (growth_type < (p_super + p_sub))
     samples["is_exponential"] = ~(samples["is_superexponential"] | samples["is_subexponential"])
-    idx += 1
     
     # Add growth/decay parameters
     samples["se_doubling_decay_fraction"] = config["distributions"]["se_doubling_decay_fraction"]
@@ -193,14 +196,14 @@ def calculate_gaps(samples: dict) -> tuple[np.ndarray, np.ndarray]:
     
     # For regular exponential cases
     exp_mask = samples["is_exponential"]
-    g_h[exp_mask] = n_doublings[exp_mask] * samples["T_t"][exp_mask]
+    g_h[exp_mask] = n_doublings[exp_mask] * samples["horizon_doubling_time"][exp_mask]
     
     # For superexponential cases
     # Each doubling takes (1-decay)^k times as long as the first doubling
     se_mask = samples["is_superexponential"]
     if np.any(se_mask):
         decay = samples["se_doubling_decay_fraction"]
-        first_doubling_time = samples["T_t"][se_mask]
+        first_doubling_time = samples["horizon_doubling_time"][se_mask]
         n = n_doublings[se_mask]
         ratio = 1 - decay
         
@@ -213,7 +216,7 @@ def calculate_gaps(samples: dict) -> tuple[np.ndarray, np.ndarray]:
     sub_mask = samples["is_subexponential"]
     if np.any(sub_mask):
         growth = samples["sub_doubling_growth_fraction"]
-        first_doubling_time = samples["T_t"][sub_mask]
+        first_doubling_time = samples["horizon_doubling_time"][sub_mask]
         n = n_doublings[sub_mask]
         ratio = 1 + growth
         
@@ -221,15 +224,11 @@ def calculate_gaps(samples: dict) -> tuple[np.ndarray, np.ndarray]:
         # where T is first doubling time, r is (1+growth), n is number of doublings
         g_h[sub_mask] = first_doubling_time * (ratio**n - 1) / (ratio - 1)
     
-    # import pdb; pdb.set_trace()
-
     # Calculate total algorithmic gap including all slowdowns
     A_values = list(samples["A_values"].values())
     all_gaps = [g_h] + A_values
     sum_gaps = np.sum(all_gaps, axis=0)
     g_SC = sum_gaps
-
-    # import pdb; pdb.set_trace()
     
     return g_h, g_SC
 
@@ -265,7 +264,7 @@ def run_single_scenario(samples: dict, params: dict, forecaster_config: dict, si
     research_stock = simulation_config["initial_research_stock"]
     labor_power = simulation_config["labor_power"]
     
-    for i in tqdm(range(len(samples["T_t"])), desc="Running simulations", leave=False):
+    for i in tqdm(range(len(samples["horizon_doubling_time"])), desc="Running simulations", leave=False):
         # Initialize simulation at current time
         t = params["t_0"] + samples["t_sat"][i]/12  # Convert months to years
         g_t = 0
@@ -275,7 +274,7 @@ def run_single_scenario(samples: dict, params: dict, forecaster_config: dict, si
         current_research_stock = research_stock
         
         # Run timesteps
-        max_time = 2050.0  # Maximum time to simulate to
+        max_time = simulation_config["max_time"]  # Get max_time from simulation config
         for _ in range(params["n_steps"]):
             # Calculate progress fraction
             progress_fraction = g_t / g_SC[i]
@@ -388,8 +387,9 @@ def create_headline_plot(all_forecaster_results: dict[str, list[float]], bins: n
         # Get color from the forecaster's config
         color = config["forecasters"][base_name]["color"]
         
-        # Filter out >2050 points for density plot
-        valid_results = [r for r in results if r <= 2050]
+        # Filter out >max_time points for density plot
+        max_time = config["simulation"]["max_time"]
+        valid_results = [r for r in results if r <= max_time]
         
         # Use KDE for smooth density estimation
         kde = gaussian_kde(valid_results)
@@ -431,16 +431,17 @@ def create_headline_plot(all_forecaster_results: dict[str, list[float]], bins: n
     # Add statistics text for each forecaster
     stats_text = []
     for name, results in all_forecaster_results.items():
-        # Calculate percentiles, marking >2050 as appropriate
+        # Calculate percentiles, marking >max_time as appropriate
+        max_time = config["simulation"]["max_time"]
         p10 = np.percentile(results, 10)
         p50 = np.percentile(results, 50)
         p90 = np.percentile(results, 90)
         
         stats = (
             f"{name}:\n"
-            f"  10th: {format_year_month(p10) if p10 <= 2050 else '>2050'}\n"
-            f"  50th: {format_year_month(p50) if p50 <= 2050 else '>2050'}\n"
-            f"  90th: {format_year_month(p90) if p90 <= 2050 else '>2050'}\n"
+            f"  10th: {format_year_month(p10, max_time) if p10 <= max_time else f'>{int(max_time)}'}\n"
+            f"  50th: {format_year_month(p50, max_time) if p50 <= max_time else f'>{int(max_time)}'}\n"
+            f"  90th: {format_year_month(p90, max_time) if p90 <= max_time else f'>{int(max_time)}'}\n"
         )
         stats_text.append(stats)
     
@@ -448,9 +449,6 @@ def create_headline_plot(all_forecaster_results: dict[str, list[float]], bins: n
             transform=ax.transAxes,
             verticalalignment="top",
             horizontalalignment="left",
-            # bbox=dict(facecolor=bg_rgb, alpha=0.9,
-            #                 edgecolor=plotting_style["colors"]["human"]["dark"],
-            #                 linewidth=0.5),
             fontsize=plotting_style["font"]["sizes"]["legend"])
     text.set_fontproperties(fonts['regular_legend'])
     
@@ -500,8 +498,9 @@ def create_scenario_plots(all_forecaster_scenarios: dict[str, list[list[float]]]
             # Get color from the forecaster's config
             color = config["forecasters"][name.lower()]["color"]
             
-            # Filter out >2050 points for density plot
-            valid_results = [r for r in results if r <= 2050]
+            # Filter out >max_time points for density plot
+            max_time = config["simulation"]["max_time"]
+            valid_results = [r for r in results if r <= max_time]
             
             # Use KDE for smooth density estimation
             kde = gaussian_kde(valid_results)
@@ -534,16 +533,17 @@ def create_scenario_plots(all_forecaster_scenarios: dict[str, list[list[float]]]
         stats_text = []
         for name, all_results in all_forecaster_scenarios.items():
             results = all_results[scenario_idx]
-            # Calculate percentiles, marking >2050 as appropriate
+            # Calculate percentiles, marking >max_time as appropriate
+            max_time = config["simulation"]["max_time"]
             p10 = np.percentile(results, 10)
             p50 = np.percentile(results, 50)
             p90 = np.percentile(results, 90)
             
             stats = (
                 f"{name}:\n"
-                f"  10th: {format_year_month(p10) if p10 <= 2050 else '>2050'}\n"
-                f"  50th: {format_year_month(p50) if p50 <= 2050 else '>2050'}\n"
-                f"  90th: {format_year_month(p90) if p90 <= 2050 else '>2050'}"
+                f"  10th: {format_year_month(p10, max_time) if p10 <= max_time else f'>{int(max_time)}'}\n"
+                f"  50th: {format_year_month(p50, max_time) if p50 <= max_time else f'>{int(max_time)}'}\n"
+                f"  90th: {format_year_month(p90, max_time) if p90 <= max_time else f'>{int(max_time)}'}"
             )
             stats_text.append(stats)
         
@@ -551,9 +551,6 @@ def create_scenario_plots(all_forecaster_scenarios: dict[str, list[list[float]]]
                 transform=ax.transAxes,
                 verticalalignment="top",
                 horizontalalignment="left",
-                # bbox=dict(facecolor=bg_rgb, alpha=0.9,
-                #                 edgecolor=plotting_style["colors"]["human"]["dark"],
-                #                 linewidth=0.5),
                 fontsize=plotting_style["font"]["sizes"]["legend"])
         text.set_fontproperties(fonts['regular_legend'])
         
@@ -602,7 +599,7 @@ def create_distribution_plots(all_forecaster_samples: dict, config: dict, plotti
         "Horizon Length at\nSaturation (h_sat)":
             {"key": "h_sat", "unit": "hours", "convert": lambda x: x * 24 * 30},  # Convert months back to hours for display
         "Horizon Doubling\nTime at start (T)": 
-            {"key": "T_t", "unit": "months"},
+            {"key": "horizon_doubling_time", "unit": "months"},
         "Time to\nSaturation (t_sat)":
             {"key": "t_sat", "unit": "days"},
         "Software Progress Rate at\nSaturation (v_software_sat)":
@@ -664,9 +661,6 @@ def create_distribution_plots(all_forecaster_samples: dict, config: dict, plotti
             transform=ax.transAxes,
             verticalalignment="top",
             horizontalalignment="left",
-            # bbox=dict(facecolor=bg_rgb, alpha=0.9,
-            #         edgecolor=plotting_style["colors"]["human"]["dark"],
-            #         linewidth=0.5),
             fontsize=plotting_style["font"]["sizes"]["legend"])
     text.set_fontproperties(fonts['regular_legend'])
     
@@ -899,10 +893,10 @@ def plot_single_distribution(ax: plt.Axes, data: np.ndarray, color: str, label: 
             linewidth=2, alpha=0.8, zorder=2)
     ax.fill_between(x_range, density, color=color, alpha=0.1)
 
-def format_year_month(year_decimal: float) -> str:
+def format_year_month(year_decimal: float, max_time: float) -> str:
     """Convert decimal year to Month Year format."""
-    if year_decimal >= 2050:
-        return ">2050"
+    if year_decimal >= max_time:
+        return f">{int(max_time)}"
         
     year = int(year_decimal)
     month = int((year_decimal % 1) * 12) + 1

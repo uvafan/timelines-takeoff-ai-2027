@@ -31,8 +31,8 @@ def get_distribution_samples(config: dict, n_sims: int, correlation: float = 0.7
     """Generate samples from all input distributions."""
     samples = {}
     
-    # First generate correlated standard normal variables for the three correlated parameters
-    n_vars = 4  # T_t, cost_speed, inverse of p_superexponential, present_prog_multiplier, SC_prog_multiplier
+    # First generate correlated standard normal variables for the two correlated parameters
+    n_vars = 2  # horizon_doubling_time, cost_speed
     
     # Create correlation matrix (all pairs have same correlation)
     corr_matrix = np.full((n_vars, n_vars), correlation)
@@ -67,10 +67,10 @@ def get_distribution_samples(config: dict, n_sims: int, correlation: float = 0.7
     
     # Sample doubling time (in months) with correlation
     dist = get_lognormal_from_80_ci(
-        config["distributions"]["T_t_ci"][0],
-        config["distributions"]["T_t_ci"][1]
+        config["distributions"]["horizon_doubling_time_ci"][0],
+        config["distributions"]["horizon_doubling_time_ci"][1]
     )
-    samples["T_t"] = dist.ppf(uniform_samples[:, 0])
+    samples["horizon_doubling_time"] = dist.ppf(uniform_samples[:, 0])
     
     # Sample cost and speed adjustment (in months) with correlation
     dist = get_lognormal_from_80_ci(
@@ -106,12 +106,12 @@ def get_distribution_samples(config: dict, n_sims: int, correlation: float = 0.7
     )
     samples["SC_prog_multiplier"] = dist.ppf(prog_uniform_samples[:, 1])
     
-    # Sample growth types with correlation for p_superexponential
+    # Sample growth types independently
     p_super = config["distributions"]["p_superexponential"]
     p_sub = config["distributions"]["p_subexponential"]
     
-    # Use the correlated uniform sample to determine p_superexponential
-    growth_type = uniform_samples[:, 2]
+    # Generate independent uniform samples for growth type
+    growth_type = np.random.uniform(0, 1, n_sims)
     samples["is_superexponential"] = growth_type < p_super
     samples["is_subexponential"] = (growth_type >= p_super) & (growth_type < (p_super + p_sub))
     samples["is_exponential"] = ~(samples["is_superexponential"] | samples["is_subexponential"])
@@ -150,13 +150,13 @@ def calculate_base_time(samples: dict, current_horizon: float) -> np.ndarray:
     
     # For regular exponential cases
     exp_mask = samples["is_exponential"]
-    total_time[exp_mask] = n_doublings[exp_mask] * samples["T_t"][exp_mask]
+    total_time[exp_mask] = n_doublings[exp_mask] * samples["horizon_doubling_time"][exp_mask]
     
     # For superexponential cases
     se_mask = samples["is_superexponential"]
     if np.any(se_mask):
         decay = samples["se_doubling_decay_fraction"]
-        first_doubling_time = samples["T_t"][se_mask]
+        first_doubling_time = samples["horizon_doubling_time"][se_mask]
         n = n_doublings[se_mask]
         ratio = 1 - decay
         total_time[se_mask] = first_doubling_time * (1 - ratio**n) / (1 - ratio)
@@ -165,7 +165,7 @@ def calculate_base_time(samples: dict, current_horizon: float) -> np.ndarray:
     sub_mask = samples["is_subexponential"]
     if np.any(sub_mask):
         growth = samples["sub_doubling_growth_fraction"]
-        first_doubling_time = samples["T_t"][sub_mask]
+        first_doubling_time = samples["horizon_doubling_time"][sub_mask]
         n = n_doublings[sub_mask]
         ratio = 1 + growth
         total_time[sub_mask] = first_doubling_time * (ratio**n - 1) / (ratio - 1)
@@ -256,7 +256,7 @@ def calculate_sc_arrival_year(samples: dict, current_horizon: float, dt: float, 
     # Convert dt from days to months
     dt_in_months = dt / 30.5
     
-    max_time = 2050
+    max_time = simulation_config["max_time"]
     
     # Run simulation for each sample with progress bar
     for i in tqdm(range(n_sims), desc="Running simulations", leave=False):
@@ -338,10 +338,10 @@ def calculate_sc_arrival_year(samples: dict, current_horizon: float, dt: float, 
     
     return ending_times
 
-def format_year_month(year_decimal: float) -> str:
+def format_year_month(year_decimal: float, max_time: float = 2050.0) -> str:
     """Convert decimal year to Month Year format."""
-    if year_decimal >= 2050:
-        return ">2050"
+    if year_decimal >= max_time:
+        return f">{int(max_time)}"
         
     year = int(year_decimal)
     month = int((year_decimal % 1) * 12) + 1
@@ -367,6 +367,9 @@ def plot_results(all_forecaster_results: dict, config: dict) -> plt.Figure:
     x_min = current_year
     x_max = current_year + 11
     
+    # Get max_time from config
+    max_time = config["simulation"]["max_time"]
+    
     # Plot each forecaster's results
     stats_text = []
     for name, results in all_forecaster_results.items():
@@ -375,8 +378,8 @@ def plot_results(all_forecaster_results: dict, config: dict) -> plt.Figure:
         # Get color from config
         color = config["forecasters"][base_name]["color"]
         
-        # Filter out >2050 points for density plot only
-        valid_results = [r for r in results if r <= 2050]
+        # Filter out >max_time points for density plot only
+        valid_results = [r for r in results if r <= max_time]
         
         # Use KDE for smooth density estimation
         kde = gaussian_kde(valid_results)
@@ -388,12 +391,12 @@ def plot_results(all_forecaster_results: dict, config: dict) -> plt.Figure:
                 linewidth=2, alpha=0.8, zorder=2)
         ax.fill_between(x_range, density, color=color, alpha=0.1)
         
-        # Calculate statistics using all results to properly show >2050
+        # Calculate statistics using all results to properly show >max_time
         stats = (
             f"{name}:\n"
-            f"  10th: {format_year_month(np.percentile(results, 10))}\n"
-            f"  50th: {format_year_month(np.percentile(results, 50))}\n"
-            f"  90th: {format_year_month(np.percentile(results, 90))}\n"
+            f"  10th: {format_year_month(np.percentile(results, 10), max_time)}\n"
+            f"  50th: {format_year_month(np.percentile(results, 50), max_time)}\n"
+            f"  90th: {format_year_month(np.percentile(results, 90), max_time)}\n"
         )
         stats_text.append(stats)
 
@@ -469,6 +472,10 @@ def run_simple_sc_simulation(config_path: str = "simple_params.yaml") -> tuple[p
                 forecaster_config,
                 config["simulation"]
             )
+            
+            # Print percentage of subexponential simulations
+            subexponential_percentage = np.mean(samples["is_subexponential"]) * 100
+            print(f"\n{name} subexponential percentage: {subexponential_percentage:.1f}%")
             
             pbar.update(1)
     
