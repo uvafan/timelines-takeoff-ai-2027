@@ -203,7 +203,7 @@ def get_compute_rate(t: float, compute_decrease_date: float) -> float:
     """Calculate compute progress rate based on time."""
     return 0.5 if t >= compute_decrease_date else 1.0
 
-def calculate_sc_arrival_year(samples: dict, current_horizon: float, dt: float, compute_decrease_date: float, human_alg_progress_decrease_date: float, max_simulation_years: float, forecaster_config: dict) -> np.ndarray:
+def calculate_sc_arrival_year(samples: dict, current_horizon: float, dt: float, compute_decrease_date: float, human_alg_progress_decrease_date: float, max_simulation_years: float, forecaster_config: dict, simulation_config: dict) -> np.ndarray:
     """Calculate time to reach SC incorporating intermediate speedups and compute scaling."""
     # First calculate base time including cost-and-speed adjustment
     base_time_in_months = calculate_base_time(samples, current_horizon)
@@ -220,38 +220,68 @@ def calculate_sc_arrival_year(samples: dict, current_horizon: float, dt: float, 
     current_year = current_date.year + (current_date.month - 1) / 12 + (current_date.day - 1) / 365.25
     
     # Convert dt from days to months
-    dt = dt / 30.5
+    dt_in_months = dt / 30.5
     
     max_time = 2050
     
     # Run simulation for each sample with progress bar
     for i in tqdm(range(n_sims), desc="Running simulations", leave=False):
         time = current_year - samples["announcement_delay"][i]/12
-    
         progress = 0.0
+        printed = False
+        
+        # Initialize labor-based research variables
+        labor_pool = simulation_config["initial_labor_pool"]
+        research_stock = simulation_config["initial_research_stock"]
+        labor_power = simulation_config["labor_power"]
         
         while progress < base_time_in_months[i] and time < max_time:
             # Calculate progress fraction
             progress_fraction = progress / base_time_in_months[i]
             
             # Calculate software speedup based on intermediate speedup s(interpolate between present and SC rates)
-            v_software = (1 + samples["present_prog_multiplier"][i]) * ((1 + samples["SC_prog_multiplier"][i])/(1 + samples["present_prog_multiplier"][i])) ** progress_fraction
+            software_prog_multiplier = (1 + samples["present_prog_multiplier"][i]) * ((1 + samples["SC_prog_multiplier"][i])/(1 + samples["present_prog_multiplier"][i])) ** progress_fraction
 
-            # adjust software rate if human alg progress has decreased
-            if time >= human_alg_progress_decrease_date:
-                only_multiplier = v_software * 0.5
-                only_additive = v_software - 0.5
-                # geometric mean of only_multiplier and only_additive, aggregating between extremes of how AIs/humans could complement
-                v_software = np.sqrt(only_multiplier * only_additive)
+            # Calculate new labor added this period
+            # Convert annual growth rate to daily rate for the time step
+            daily_growth_rate = (1 + simulation_config["labor_growth_rate"]) ** (dt/250) - 1
+            new_labor = labor_pool * daily_growth_rate
+            labor_pool += new_labor
+            
+            # Calculate research contribution from new labor
+            research_contribution = ((new_labor ** labor_power) * software_prog_multiplier) / (250/dt)
+            
+            # Add to research stock
+            new_research_stock = research_stock + research_contribution
+            
+            # Calculate actual growth rate (annualized)
+            actual_growth = (new_research_stock / research_stock) ** (250/dt) - 1
+
+            if progress == 0:
+                baseline_growth = actual_growth
+            
+            # Calculate adjustment factor based on growth rate ratio
+            # Using log ratio to properly account for compound growth
+            growth_ratio = np.log(1 + actual_growth) / np.log(1 + baseline_growth)
+
+            # Update research stock
+            research_stock = new_research_stock
             
             # Get compute rate for current time (not affected by intermediate speedups)
             compute_rate = get_compute_rate(time, compute_decrease_date)
             # Total rate is weighted average of software and compute rates
-            total_rate = software_progress_share[i] * v_software + (1 - software_progress_share[i]) * compute_rate
+            total_rate = software_progress_share[i] * growth_ratio + (1 - software_progress_share[i]) * compute_rate
             
             # Update progress and time
-            progress += dt * total_rate
-            time += dt / 12  # Convert months to years
+            progress += dt_in_months * total_rate
+            time += dt_in_months / 12  # Convert months to years
+
+
+            if progress > software_prog_multiplier and not printed:
+                printed=True
+                print("interesting")
+            # import pdb; pdb.set_trace()
+
         
         # If we hit the time limit, set to max time
         if time >= max_time:
@@ -390,7 +420,8 @@ def run_simple_sc_simulation(config_path: str = "simple_params.yaml") -> tuple[p
                 config["simulation"]["compute_decrease_date"],
                 config["simulation"]["human_alg_progress_decrease_date"],
                 config["simulation"]["max_simulation_years"],
-                forecaster_config
+                forecaster_config,
+                config["simulation"]
             )
             
             pbar.update(1)
