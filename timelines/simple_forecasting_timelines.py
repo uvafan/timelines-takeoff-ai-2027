@@ -228,7 +228,6 @@ def calculate_sc_arrival_year(samples: dict, current_horizon: float, dt: float, 
     for i in tqdm(range(n_sims), desc="Running simulations", leave=False):
         time = current_year - samples["announcement_delay"][i]/12
         progress = 0.0
-        printed = False
         
         # Initialize labor-based research variables
         labor_pool = simulation_config["initial_labor_pool"]

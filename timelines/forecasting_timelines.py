@@ -219,7 +219,7 @@ def calculate_gaps(samples: dict) -> tuple[np.ndarray, np.ndarray]:
     
     return g_h, g_SC
 
-def run_single_scenario(samples: dict, params: dict, forecaster_config: dict) -> list[float]:
+def run_single_scenario(samples: dict, params: dict, forecaster_config: dict, simulation_config: dict) -> list[float]:
     """Run simulation for a single scenario configuration."""
     successful_times = []
     _, g_SC = calculate_gaps(samples)  # Use sampled h_sat values
@@ -228,9 +228,9 @@ def run_single_scenario(samples: dict, params: dict, forecaster_config: dict) ->
     software_progress_share = samples["initial_software_progress_share"]
     
     # Initialize labor-based research variables
-    labor_pool = forecaster_config["simulation"]["initial_labor_pool"]
-    research_stock = forecaster_config["simulation"]["initial_research_stock"]
-    labor_power = forecaster_config["simulation"]["labor_power"]
+    labor_pool = simulation_config["initial_labor_pool"]
+    research_stock = simulation_config["initial_research_stock"]
+    labor_power = simulation_config["labor_power"]
     
     for i in tqdm(range(len(samples["T_t"])), desc="Running simulations", leave=False):
         # Initialize simulation at current time
@@ -251,7 +251,7 @@ def run_single_scenario(samples: dict, params: dict, forecaster_config: dict) ->
             software_prog_multiplier = (1 + samples["v_software_sat"][i]) * ((1 + samples["v_software_SC"][i])/(1 + samples["v_software_sat"][i])) ** progress_fraction
 
             # Convert annual growth rate to daily rate for the time step
-            daily_growth_rate = (1 + forecaster_config["simulation"]["labor_growth_rate"]) ** (params["dt"]/250) - 1
+            daily_growth_rate = (1 + simulation_config["labor_growth_rate"]) ** (params["dt"]/250) - 1
 
             # Calculate new labor added this period
             new_labor = current_labor_pool * daily_growth_rate
@@ -910,7 +910,7 @@ def run_and_plot_are_scenarios(config_path: str = "params.yaml") -> tuple[plt.Fi
         all_forecaster_samples[name] = samples
         
         # Run simulation
-        results = run_single_scenario(samples, sim_params, forecaster_config)
+        results = run_single_scenario(samples, sim_params, forecaster_config, config["simulation"])
         all_forecaster_headline_results[name] = results
     
     print("\nGenerating plots...")
