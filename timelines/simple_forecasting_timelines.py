@@ -199,11 +199,45 @@ def calculate_base_time(samples: dict, current_horizon: float) -> np.ndarray:
     
     return total_time
 
-def get_compute_rate(t: float, compute_decrease_date: float) -> float:
-    """Calculate compute progress rate based on time."""
-    return 0.5 if t >= compute_decrease_date else 1.0
+def get_compute_rate(t: float, compute_schedule: list) -> float:
+    """Calculate compute progress rate based on time and compute schedule.
+    
+    Args:
+        t: Current time in years
+        compute_schedule: List of [year, rate] pairs, sorted by year
+    """
+    # Default rate is 1.0
+    current_rate = 1.0
+    
+    # Find the most recent schedule entry that applies
+    for year, rate in compute_schedule:
+        if t >= year:
+            current_rate = rate
+        else:
+            break
+            
+    return current_rate
 
-def calculate_sc_arrival_year(samples: dict, current_horizon: float, dt: float, compute_decrease_date: float, human_alg_progress_decrease_date: float, max_simulation_years: float, forecaster_config: dict, simulation_config: dict) -> np.ndarray:
+def get_labor_growth_rate(t: float, labor_growth_schedule: list) -> float:
+    """Calculate labor growth rate based on time and labor growth schedule.
+    
+    Args:
+        t: Current time in years
+        labor_growth_schedule: List of [year, rate] pairs, sorted by year
+    """
+    # Default rate is 0.5 (same as before)
+    current_rate = 0.5
+    
+    # Find the most recent schedule entry that applies
+    for year, rate in labor_growth_schedule:
+        if t >= year:
+            current_rate = rate
+        else:
+            break
+            
+    return current_rate
+
+def calculate_sc_arrival_year(samples: dict, current_horizon: float, dt: float, human_alg_progress_decrease_date: float, max_simulation_years: float, forecaster_config: dict, simulation_config: dict) -> np.ndarray:
     """Calculate time to reach SC incorporating intermediate speedups and compute scaling."""
     # First calculate base time including cost-and-speed adjustment
     base_time_in_months = calculate_base_time(samples, current_horizon)
@@ -234,6 +268,12 @@ def calculate_sc_arrival_year(samples: dict, current_horizon: float, dt: float, 
         research_stock = simulation_config["initial_research_stock"]
         labor_power = simulation_config["labor_power"]
         
+        # Track previous labor growth rate to detect changes
+        prev_labor_growth_rate = None
+        
+        # Counter for iteration tracking
+        iteration_count = 0
+        
         while progress < base_time_in_months[i] and time < max_time:
             # Calculate progress fraction
             progress_fraction = progress / base_time_in_months[i]
@@ -241,8 +281,11 @@ def calculate_sc_arrival_year(samples: dict, current_horizon: float, dt: float, 
             # Calculate software speedup based on intermediate speedup s(interpolate between present and SC rates)
             software_prog_multiplier = (1 + samples["present_prog_multiplier"][i]) * ((1 + samples["SC_prog_multiplier"][i])/(1 + samples["present_prog_multiplier"][i])) ** progress_fraction
 
+            # Get current labor growth rate from schedule
+            current_labor_growth_rate = get_labor_growth_rate(time, forecaster_config["labor_growth_schedule"])
+            
             # Convert annual growth rate to daily rate for the time step
-            daily_growth_rate = (1 + simulation_config["labor_growth_rate"]) ** (dt/250) - 1
+            daily_growth_rate = (1 + current_labor_growth_rate) ** (dt/250) - 1
 
             # Calculate new labor added this period
             new_labor = labor_pool * daily_growth_rate
@@ -263,9 +306,17 @@ def calculate_sc_arrival_year(samples: dict, current_horizon: float, dt: float, 
             # Calculate adjustment factor based on growth rate ratio
             # Using log ratio to properly account for compound growth
             growth_ratio = np.log(1 + actual_growth) / np.log(1 + baseline_growth)
+            
+            # Print growth ratio every 200 iterations
+            # if iteration_count % 1000 == 0 and i % 100 == 0:
+            #     print(f"\nSimulation {i+1} at {format_year_month(time)}:")
+            #     print(f"  Progress: {progress:.2f}/{base_time_in_months[i]:.2f} months ({progress_fraction*100:.1f}%)")
+            #     print(f"  Growth ratio: {growth_ratio:.3f}")
+            #     print(f"  Labor pool: {labor_pool:.0f}")
+            #     print(f"  Research stock: {research_stock:.1f}")
 
-            # Get compute rate for current time (not affected by intermediate speedups)
-            compute_rate = get_compute_rate(time, compute_decrease_date)
+            # Get compute rate for current time using compute schedule
+            compute_rate = get_compute_rate(time, forecaster_config["compute_schedule"])
             # Total rate is weighted average of software and compute rates
             total_rate = software_progress_share[i] * growth_ratio + (1 - software_progress_share[i]) * compute_rate
             
@@ -275,6 +326,9 @@ def calculate_sc_arrival_year(samples: dict, current_horizon: float, dt: float, 
             
             # Update research stock
             research_stock = new_research_stock
+            
+            # Increment iteration counter
+            iteration_count += 1
 
         # If we hit the time limit, set to max time
         if time >= max_time:
@@ -410,7 +464,6 @@ def run_simple_sc_simulation(config_path: str = "simple_params.yaml") -> tuple[p
                 samples, 
                 config["simulation"]["current_horizon"],
                 config["simulation"]["dt"],
-                config["simulation"]["compute_decrease_date"],
                 config["simulation"]["human_alg_progress_decrease_date"],
                 config["simulation"]["max_simulation_years"],
                 forecaster_config,

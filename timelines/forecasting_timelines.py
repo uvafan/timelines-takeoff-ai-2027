@@ -164,10 +164,24 @@ def get_distribution_samples(config: dict, n_sims: int, correlation: float = 0.7
     
     return samples
 
-def get_v_compute(t: float) -> float:
-    """Calculate compute progress rate based on time."""
-    compute_decrease_date = 2029.0  # End of 2028
-    return 0.5 if t >= compute_decrease_date else 1.0
+def get_v_compute(t: float, compute_schedule: list) -> float:
+    """Calculate compute progress rate based on time and compute schedule.
+    
+    Args:
+        t: Current time in years
+        compute_schedule: List of [year, rate] pairs, sorted by year
+    """
+    # Default rate is 1.0
+    current_rate = 1.0
+    
+    # Find the most recent schedule entry that applies
+    for year, rate in compute_schedule:
+        if t >= year:
+            current_rate = rate
+        else:
+            break
+            
+    return current_rate
 
 def calculate_gaps(samples: dict) -> tuple[np.ndarray, np.ndarray]:
     """Calculate horizon gap and total algorithmic gap."""
@@ -219,6 +233,25 @@ def calculate_gaps(samples: dict) -> tuple[np.ndarray, np.ndarray]:
     
     return g_h, g_SC
 
+def get_labor_growth_rate(t: float, labor_growth_schedule: list) -> float:
+    """Calculate labor growth rate based on time and labor growth schedule.
+    
+    Args:
+        t: Current time in years
+        labor_growth_schedule: List of [year, rate] pairs, sorted by year
+    """
+    # Default rate is 0.5 (same as before)
+    current_rate = 0.5
+    
+    # Find the most recent schedule entry that applies
+    for year, rate in labor_growth_schedule:
+        if t >= year:
+            current_rate = rate
+        else:
+            break
+            
+    return current_rate
+
 def run_single_scenario(samples: dict, params: dict, forecaster_config: dict, simulation_config: dict) -> list[float]:
     """Run simulation for a single scenario configuration."""
     successful_times = []
@@ -250,8 +283,11 @@ def run_single_scenario(samples: dict, params: dict, forecaster_config: dict, si
             # Calculate software progress rate based on intermediate speedup (interpolate between present and SC rates)
             software_prog_multiplier = (1 + samples["v_software_sat"][i]) * ((1 + samples["v_software_SC"][i])/(1 + samples["v_software_sat"][i])) ** progress_fraction
 
+            # Get current labor growth rate from schedule
+            current_labor_growth_rate = get_labor_growth_rate(t, forecaster_config["labor_growth_schedule"])
+            
             # Convert annual growth rate to daily rate for the time step
-            daily_growth_rate = (1 + simulation_config["labor_growth_rate"]) ** (params["dt"]/250) - 1
+            daily_growth_rate = (1 + current_labor_growth_rate) ** (params["dt"]/250) - 1
 
             # Calculate new labor added this period
             new_labor = current_labor_pool * daily_growth_rate
@@ -273,8 +309,8 @@ def run_single_scenario(samples: dict, params: dict, forecaster_config: dict, si
             # Using log ratio to properly account for compound growth
             growth_ratio = np.log(1 + actual_growth) / np.log(1 + baseline_growth)
 
-            # Get compute progress rate
-            v_compute = get_v_compute(t)
+            # Get compute progress rate using compute schedule
+            v_compute = get_v_compute(t, forecaster_config["compute_schedule"])
             
             # Calculate total progress rate using weighted average
             v_t = software_progress_share[i] * growth_ratio + (1 - software_progress_share[i]) * v_compute
