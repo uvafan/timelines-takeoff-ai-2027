@@ -10,6 +10,8 @@ Then, cd into the `timelines` folder and run `poetry run python forecasting_time
 
 To run the takeoff simulation, input your parameters in `takeoff/params.yaml`, cd into `takeoff` then run `forecasting_takeoff.py`.
 
+Note that all time amounts in the timelines simulation are in "work time", i.e. the amount of time that a human would work during that time period: for example, a work week is 40 hours and a work year is 2,000 hours.
+
 We'd love for others run the simulations with their own parameters or extend our work. For example, due to time constraints we weren't able to incorporate training compute increases or uncertainty over AI R&D progress multipliers in our takeoff simulation.
 
 The simulation was implemented by Nikola Jurkovic and Eli Lifland.
