@@ -155,8 +155,14 @@ def get_distribution_samples(config: dict, n_sims: int, correlation: float = 0.7
                     samples["superexponential_start_time"][i] = horizon
                     break
     
-    # Add growth/decay parameters
-    samples["se_doubling_decay_fraction"] = config["distributions"]["se_doubling_decay_fraction"]
+    # Sample se_doubling_decay_fraction from lognormal distribution
+    dist = get_lognormal_from_80_ci(
+        config["distributions"]["se_doubling_decay_fraction_ci"][0],
+        config["distributions"]["se_doubling_decay_fraction_ci"][1]
+    )
+    samples["se_doubling_decay_fraction"] = np.clip(dist.rvs(n_sims), 0, 1)  # Clip to ensure decay is between 0 and 1
+    
+    # Add subexponential growth parameter
     samples["sub_doubling_growth_fraction"] = config["distributions"]["sub_doubling_growth_fraction"]
     
     # Algorithmic slowdowns with probability of being zero
@@ -234,7 +240,7 @@ def calculate_gaps(samples: dict) -> tuple[np.ndarray, np.ndarray]:
                 
                 # Calculate time for superexponential phase
                 if doublings_after > 0:
-                    decay = samples["se_doubling_decay_fraction"]
+                    decay = samples["se_doubling_decay_fraction"][i]  # Get decay for this specific simulation
                     ratio = 1 - decay
                     # Use geometric series sum formula for remaining doublings
                     g_h[i] += first_doubling_time * (1 - ratio**doublings_after) / (1 - ratio)

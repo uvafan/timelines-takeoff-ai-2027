@@ -128,8 +128,14 @@ def get_distribution_samples(config: dict, n_sims: int, correlation: float = 0.7
                     samples["superexponential_start_time"][i] = horizon
                     break
     
-    # Add growth/decay parameters
-    samples["se_doubling_decay_fraction"] = config["distributions"]["se_doubling_decay_fraction"]
+    # Sample se_doubling_decay_fraction from lognormal distribution
+    dist = get_lognormal_from_80_ci(
+        config["distributions"]["se_doubling_decay_fraction_ci"][0],
+        config["distributions"]["se_doubling_decay_fraction_ci"][1]
+    )
+    samples["se_doubling_decay_fraction"] = np.clip(dist.rvs(n_sims), 0, 1)  # Clip to ensure decay is between 0 and 1
+    
+    # Add subexponential growth parameter
     samples["sub_doubling_growth_fraction"] = config["distributions"]["sub_doubling_growth_fraction"]
     
     return samples
@@ -183,7 +189,7 @@ def calculate_base_time(samples: dict, current_horizon: float) -> np.ndarray:
                 n_after = n - n_before
                 if n_after > 0:
                     # Calculate time for superexponential phase
-                    decay = samples["se_doubling_decay_fraction"]
+                    decay = samples["se_doubling_decay_fraction"][i]  # Get decay for this specific simulation
                     ratio = 1 - decay
                     time_after = doubling_time * (1 - ratio**n_after) / (1 - ratio)
                     total_time[i] = time_before + time_after
