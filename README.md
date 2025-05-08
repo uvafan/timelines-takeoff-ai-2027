@@ -4,9 +4,11 @@ This is the code to run the simulations for AI 2027's [timelines forecast](https
 
 Use `poetry install` to install needed packages.
 
-To run the timelines simulation, input your parameters in the `simulation/params.yaml` file. 
+To run the original timelines simulation, input your parameters in the `timelines/params.yaml` file. 
 
-Then, cd into the `timelines` folder and run `poetry run python forecasting_timelines.py` to run the benchmarks and gaps method. Run `simple_forecasting_timelines.py` to run the time horizon extensionmethod. The results are saved in the `figures` folder.
+Then, cd into the `timelines` folder and run `poetry run python forecasting_timelines.py` to run the benchmarks and gaps method. Run `simple_forecasting_timelines.py` to run the time horizon extension method. The results are saved in the `figures` folder.
+
+Do the same thing but in the `timelines_may_2025_update` folder to run the May 2025 version of the timelines model.
 
 To run the takeoff simulation, input your parameters in `takeoff/params.yaml`, cd into `takeoff` then run `forecasting_takeoff.py`.
 

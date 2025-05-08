@@ -55,7 +55,7 @@ def weighted_geometric_mean(values, weights):
 def get_distribution_samples(config: dict, n_sims: int, correlation: float = 0.7) -> dict:
     """Generate correlated samples from all input distributions."""
     # First generate correlated standard normal variables
-    n_vars = 3 + len(config["algorithmic_slowdowns"]) + 1  # Core params (excluding h_sat, h_SC, d, v_algorithmic vars) + A_values + superexponential inverse
+    n_vars = 3 + len(config["algorithmic_slowdowns"])  # Core params (excluding h_sat, h_SC, d, v_algorithmic vars) + A_values
     
     # Create correlation matrix (all pairs have same correlation)
     corr_matrix = np.full((n_vars, n_vars), correlation)
@@ -72,6 +72,19 @@ def get_distribution_samples(config: dict, n_sims: int, correlation: float = 0.7
     samples = {}
     idx = 0
     
+    # Sample initial software progress share from normal distribution
+    lower, upper = config["initial_software_progress_share_ci"]
+    # Convert 80% CI to normal distribution parameters
+    z_low = -1.28  # norm.ppf(0.1)
+    z_high = 1.28  # norm.ppf(0.9)
+    mean = (lower + upper) / 2
+    std = (upper - lower) / (z_high - z_low)
+    # Generate samples and clip to [0.1, 0.9]
+    samples["initial_software_progress_share"] = np.clip(
+        np.random.normal(mean, std, n_sims),
+        0.1, 0.9
+    )
+    
     # Sample h_sat independently
     dist = get_lognormal_from_80_ci(
         config["distributions"]["h_sat_ci"][0],  # In hours
@@ -87,21 +100,21 @@ def get_distribution_samples(config: dict, n_sims: int, correlation: float = 0.7
     samples["h_SC"] = dist.ppf(np.random.random(n_sims))  # Already in months
 
     # Generate separate correlated samples for progress multipliers
-    n_prog_vars = 2  # v_algorithmic_sat, v_algorithmic_SC
+    n_prog_vars = 2  # v_software_sat, v_software_SC
     prog_corr_matrix = np.array([[1.0, correlation], [correlation, 1.0]])
     prog_normal_samples = np.random.multivariate_normal(np.zeros(n_prog_vars), prog_corr_matrix, size=n_sims)
     prog_uniform_samples = norm.cdf(prog_normal_samples)
     
-    # Sample v_algorithmic variables with correlation to each other only
+    # Sample v_software variables with correlation to each other only
     dist = get_lognormal_from_80_ci(*config["distributions"]["v_algorithmic_sat_ci"])
-    samples["v_algorithmic_sat"] = dist.ppf(prog_uniform_samples[:, 0])
+    samples["v_software_sat"] = dist.ppf(prog_uniform_samples[:, 0])
     
     dist = get_lognormal_from_80_ci(*config["distributions"]["v_algorithmic_SC_ci"])
-    samples["v_algorithmic_SC"] = dist.ppf(prog_uniform_samples[:, 1])
+    samples["v_software_SC"] = dist.ppf(prog_uniform_samples[:, 1])
 
-    # Sample T_t with correlation
-    dist = get_lognormal_from_80_ci(*config["distributions"]["T_t_ci"])
-    samples["T_t"] = dist.ppf(uniform_samples[:, idx])
+    # Sample horizon_doubling_time with correlation
+    dist = get_lognormal_from_80_ci(*config["distributions"]["horizon_doubling_time_ci"])
+    samples["horizon_doubling_time"] = dist.ppf(uniform_samples[:, idx])
     idx += 1
 
     # Handle t_sat as dates
@@ -120,15 +133,36 @@ def get_distribution_samples(config: dict, n_sims: int, correlation: float = 0.7
     dist = get_lognormal_from_80_ci(*config["distributions"]["d_ci"])
     samples["d"] = dist.ppf(np.random.random(n_sims))  # Already in months
     
-    # Add growth type parameters with correlation for superexponential
-    growth_type = uniform_samples[:, idx]
-    samples["is_superexponential"] = growth_type < config["distributions"]["p_superexponential"]
-    samples["is_subexponential"] = (growth_type >= config["distributions"]["p_superexponential"]) & (growth_type < (config["distributions"]["p_superexponential"] + config["distributions"]["p_subexponential"]))
-    samples["is_exponential"] = ~(samples["is_superexponential"] | samples["is_subexponential"])
-    idx += 1
+    # Store the superexponential schedule for later use
+    samples["superexponential_schedule_months"] = config["distributions"]["superexponential_schedule_months"]
     
-    # Add growth/decay parameters
-    samples["se_doubling_decay_fraction"] = config["distributions"]["se_doubling_decay_fraction"]
+    # Sample subexponential probability
+    p_sub = config["distributions"]["p_subexponential"]
+    
+    # Generate independent uniform samples for growth type
+    growth_type = np.random.uniform(0, 1, n_sims)
+    samples["is_subexponential"] = growth_type > (1 - p_sub)
+    samples["is_exponential"] = ~samples["is_subexponential"]
+    
+    # For each simulation, determine if and when it becomes superexponential
+    samples["superexponential_start_time"] = np.full(n_sims, np.inf)  # Default to never becoming superexponential
+    for i in range(n_sims):
+        if not samples["is_subexponential"][i]:  # Only consider non-subexponential cases
+            # Generate a random number to determine if/when it becomes superexponential
+            for horizon, prob in samples["superexponential_schedule_months"]:
+                if growth_type[i] < prob:
+                    # Store the horizon directly since it's already in months
+                    samples["superexponential_start_time"][i] = horizon
+                    break
+    
+    # Sample se_doubling_decay_fraction from lognormal distribution
+    dist = get_lognormal_from_80_ci(
+        config["distributions"]["se_doubling_decay_fraction_ci"][0],
+        config["distributions"]["se_doubling_decay_fraction_ci"][1]
+    )
+    samples["se_doubling_decay_fraction"] = np.clip(dist.rvs(n_sims), 0, 1)  # Clip to ensure decay is between 0 and 1
+    
+    # Add subexponential growth parameter
     samples["sub_doubling_growth_fraction"] = config["distributions"]["sub_doubling_growth_fraction"]
     
     # Algorithmic slowdowns with probability of being zero
@@ -151,10 +185,24 @@ def get_distribution_samples(config: dict, n_sims: int, correlation: float = 0.7
     
     return samples
 
-def get_v_compute(t: float) -> float:
-    """Calculate compute progress rate based on time."""
-    compute_decrease_date = 2029.0  # End of 2028
-    return 0.5 if t >= compute_decrease_date else 1.0
+def get_v_compute(t: float, compute_schedule: list) -> float:
+    """Calculate compute progress rate based on time and compute schedule.
+    
+    Args:
+        t: Current time in years
+        compute_schedule: List of [year, rate] pairs, sorted by year
+    """
+    # Default rate is 1.0
+    current_rate = 1.0
+    
+    # Find the most recent schedule entry that applies
+    for year, rate in compute_schedule:
+        if t >= year:
+            current_rate = rate
+        else:
+            break
+            
+    return current_rate
 
 def calculate_gaps(samples: dict) -> tuple[np.ndarray, np.ndarray]:
     """Calculate horizon gap and total algorithmic gap."""
@@ -164,76 +212,131 @@ def calculate_gaps(samples: dict) -> tuple[np.ndarray, np.ndarray]:
     # Calculate horizon gap based on growth type
     g_h = np.zeros_like(n_doublings)
     
-    # For regular exponential cases
-    exp_mask = samples["is_exponential"]
-    g_h[exp_mask] = n_doublings[exp_mask] * samples["T_t"][exp_mask]
+    # For each simulation, determine if it becomes superexponential during the gap
+    for i in range(len(n_doublings)):
+        if samples["is_subexponential"][i]:
+            # For subexponential cases
+            # Each doubling takes (1+growth)^k times as long as the first doubling
+            growth = samples["sub_doubling_growth_fraction"]
+            first_doubling_time = samples["horizon_doubling_time"][i]
+            n = n_doublings[i]
+            ratio = 1 + growth
+            
+            # Use geometric series sum formula: T * (r^n-1)/(r-1)
+            # where T is first doubling time, r is (1+growth), n is number of doublings
+            g_h[i] = first_doubling_time * (ratio**n - 1) / (ratio - 1)
+        else:
+            # For non-subexponential cases, check if/when it becomes superexponential
+            superexponential_start = samples["superexponential_start_time"][i]
+            if superexponential_start < np.inf:
+                # Calculate how many doublings happen before superexponential transition
+                doublings_before = np.log2(superexponential_start/samples["h_sat"][i])
+                doublings_before = min(doublings_before, n_doublings[i])
+                doublings_after = n_doublings[i] - doublings_before
+                
+                # Calculate time for exponential phase
+                first_doubling_time = samples["horizon_doubling_time"][i]
+                g_h[i] = first_doubling_time * doublings_before
+                
+                # Calculate time for superexponential phase
+                if doublings_after > 0:
+                    decay = samples["se_doubling_decay_fraction"][i]  # Get decay for this specific simulation
+                    ratio = 1 - decay
+                    # Use geometric series sum formula for remaining doublings
+                    g_h[i] += first_doubling_time * (1 - ratio**doublings_after) / (1 - ratio)
+            else:
+                # Pure exponential case
+                g_h[i] = samples["horizon_doubling_time"][i] * n_doublings[i]
     
-    # For superexponential cases
-    # Each doubling takes (1-decay)^k times as long as the first doubling
-    se_mask = samples["is_superexponential"]
-    if np.any(se_mask):
-        decay = samples["se_doubling_decay_fraction"]
-        first_doubling_time = samples["T_t"][se_mask]
-        n = n_doublings[se_mask]
-        ratio = 1 - decay
-        
-        # Use geometric series sum formula: T * (1-r^n)/(1-r)
-        # where T is first doubling time, r is (1-decay), n is number of doublings
-        g_h[se_mask] = first_doubling_time * (1 - ratio**n) / (1 - ratio)
-    
-    # For subexponential cases
-    # Each doubling takes (1+growth)^k times as long as the first doubling
-    sub_mask = samples["is_subexponential"]
-    if np.any(sub_mask):
-        growth = samples["sub_doubling_growth_fraction"]
-        first_doubling_time = samples["T_t"][sub_mask]
-        n = n_doublings[sub_mask]
-        ratio = 1 + growth
-        
-        # Use geometric series sum formula: T * (r^n-1)/(r-1)
-        # where T is first doubling time, r is (1+growth), n is number of doublings
-        g_h[sub_mask] = first_doubling_time * (ratio**n - 1) / (ratio - 1)
-    
-    # import pdb; pdb.set_trace()
-
     # Calculate total algorithmic gap including all slowdowns
     A_values = list(samples["A_values"].values())
     all_gaps = [g_h] + A_values
     sum_gaps = np.sum(all_gaps, axis=0)
     g_SC = sum_gaps
-
-    # import pdb; pdb.set_trace()
     
     return g_h, g_SC
 
-def run_single_scenario(samples: dict, params: dict) -> list[float]:
+def get_labor_growth_rate(t: float, labor_growth_schedule: list) -> float:
+    """Calculate labor growth rate based on time and labor growth schedule.
+    
+    Args:
+        t: Current time in years
+        labor_growth_schedule: List of [year, rate] pairs, sorted by year
+    """
+    # Default rate is 0.5 (same as before)
+    current_rate = 0.5
+    
+    # Find the most recent schedule entry that applies
+    for year, rate in labor_growth_schedule:
+        if t >= year:
+            current_rate = rate
+        else:
+            break
+            
+    return current_rate
+
+def run_single_scenario(samples: dict, params: dict, forecaster_config: dict, simulation_config: dict) -> list[float]:
     """Run simulation for a single scenario configuration."""
     successful_times = []
     _, g_SC = calculate_gaps(samples)  # Use sampled h_sat values
     
-    for i in tqdm(range(len(samples["T_t"])), desc="Running simulations", leave=False):
+    # Get software progress share from samples
+    software_progress_share = samples["initial_software_progress_share"]
+    
+    # Initialize labor-based research variables
+    labor_pool = simulation_config["initial_labor_pool"]
+    research_stock = simulation_config["initial_research_stock"]
+    labor_power = simulation_config["labor_power"]
+    
+    for i in tqdm(range(len(samples["horizon_doubling_time"])), desc="Running simulations", leave=False):
         # Initialize simulation at current time
         t = params["t_0"] + samples["t_sat"][i]/12  # Convert months to years
         g_t = 0
         
+        # Reset labor and research variables for each simulation
+        current_labor_pool = labor_pool
+        current_research_stock = research_stock
+        
         # Run timesteps
-        max_time = 2050.0  # Maximum time to simulate to
+        max_time = simulation_config["max_time"]  # Get max_time from simulation config
         for _ in range(params["n_steps"]):
-            # Calculate algorithmic progress rate - add 1 to both rates since they're now lognormal offsets
-            v_algorithmic = (1 + samples["v_algorithmic_sat"][i]) * ((1 + samples["v_algorithmic_SC"][i])/(1 + samples["v_algorithmic_sat"][i])) ** (g_t / g_SC[i])
+            # Calculate progress fraction
+            progress_fraction = g_t / g_SC[i]
             
-            # adjust algorithmic rate if human alg progress has decreased, in betweene
-            if t >= 2029:
-                only_multiplier = v_algorithmic * 0.5
-                only_additive = v_algorithmic - 0.5
-                # geometric mean of only_multiplier and only_additive, aggregating between extremes of how AIs/humans could complement
-                v_algorithmic = np.sqrt(only_multiplier * only_additive)
+            # Calculate software progress rate based on intermediate speedup (interpolate between present and SC rates)
+            software_prog_multiplier = (1 + samples["v_software_sat"][i]) * ((1 + samples["v_software_SC"][i])/(1 + samples["v_software_sat"][i])) ** progress_fraction
 
-            # Get compute progress rate
-            v_compute = get_v_compute(t)
+            # Get current labor growth rate from schedule
+            current_labor_growth_rate = get_labor_growth_rate(t, forecaster_config["labor_growth_schedule"])
             
-            # Calculate total progress rate (mean of compute and algorithmic)
-            v_t = (v_compute + v_algorithmic) / 2
+            # Convert annual growth rate to daily rate for the time step
+            daily_growth_rate = (1 + current_labor_growth_rate) ** (params["dt"]/250) - 1
+
+            # Calculate new labor added this period
+            new_labor = current_labor_pool * daily_growth_rate
+            current_labor_pool += new_labor
+            
+            # Calculate research contribution on a yearly basis, then divide
+            research_contribution = ((((current_labor_pool+1) ** labor_power)-1) * software_prog_multiplier) / (250/params["dt"])
+
+            # Add to research stock
+            new_research_stock = current_research_stock + research_contribution
+            
+            # Calculate actual growth rate (annualized)
+            actual_growth = (new_research_stock / current_research_stock) ** (250/params["dt"]) - 1
+
+            if g_t == 0:
+                baseline_growth = actual_growth
+            
+            # Calculate adjustment factor based on growth rate ratio
+            # Using log ratio to properly account for compound growth
+            growth_ratio = np.log(1 + actual_growth) / np.log(1 + baseline_growth)
+
+            # Get compute progress rate using compute schedule
+            v_compute = get_v_compute(t, forecaster_config["compute_schedule"])
+            
+            # Calculate total progress rate using weighted average
+            v_t = software_progress_share[i] * growth_ratio + (1 - software_progress_share[i]) * v_compute
             
             # Update progress (dt is in days, convert to months by dividing by ~30.5)
             g_t += v_t * (params["dt"]/30.5)
@@ -250,6 +353,9 @@ def run_single_scenario(samples: dict, params: dict) -> list[float]:
             if t >= max_time:
                 successful_times.append(max_time)
                 break
+            
+            # Update research stock
+            current_research_stock = new_research_stock
             
     return successful_times
 
@@ -305,8 +411,9 @@ def create_headline_plot(all_forecaster_results: dict[str, list[float]], bins: n
         # Get color from the forecaster's config
         color = config["forecasters"][base_name]["color"]
         
-        # Filter out >2050 points for density plot
-        valid_results = [r for r in results if r <= 2050]
+        # Filter out >max_time points for density plot
+        max_time = config["simulation"]["max_time"]
+        valid_results = [r for r in results if r <= max_time]
         
         # Use KDE for smooth density estimation
         kde = gaussian_kde(valid_results)
@@ -348,16 +455,17 @@ def create_headline_plot(all_forecaster_results: dict[str, list[float]], bins: n
     # Add statistics text for each forecaster
     stats_text = []
     for name, results in all_forecaster_results.items():
-        # Calculate percentiles, marking >2050 as appropriate
+        # Calculate percentiles, marking >max_time as appropriate
+        max_time = config["simulation"]["max_time"]
         p10 = np.percentile(results, 10)
         p50 = np.percentile(results, 50)
         p90 = np.percentile(results, 90)
         
         stats = (
             f"{name}:\n"
-            f"  10th: {format_year_month(p10) if p10 <= 2050 else '>2050'}\n"
-            f"  50th: {format_year_month(p50) if p50 <= 2050 else '>2050'}\n"
-            f"  90th: {format_year_month(p90) if p90 <= 2050 else '>2050'}\n"
+            f"  10th: {format_year_month(p10, max_time) if p10 <= max_time else f'>{int(max_time)}'}\n"
+            f"  50th: {format_year_month(p50, max_time) if p50 <= max_time else f'>{int(max_time)}'}\n"
+            f"  90th: {format_year_month(p90, max_time) if p90 <= max_time else f'>{int(max_time)}'}\n"
         )
         stats_text.append(stats)
     
@@ -365,9 +473,6 @@ def create_headline_plot(all_forecaster_results: dict[str, list[float]], bins: n
             transform=ax.transAxes,
             verticalalignment="top",
             horizontalalignment="left",
-            # bbox=dict(facecolor=bg_rgb, alpha=0.9,
-            #                 edgecolor=plotting_style["colors"]["human"]["dark"],
-            #                 linewidth=0.5),
             fontsize=plotting_style["font"]["sizes"]["legend"])
     text.set_fontproperties(fonts['regular_legend'])
     
@@ -417,8 +522,9 @@ def create_scenario_plots(all_forecaster_scenarios: dict[str, list[list[float]]]
             # Get color from the forecaster's config
             color = config["forecasters"][name.lower()]["color"]
             
-            # Filter out >2050 points for density plot
-            valid_results = [r for r in results if r <= 2050]
+            # Filter out >max_time points for density plot
+            max_time = config["simulation"]["max_time"]
+            valid_results = [r for r in results if r <= max_time]
             
             # Use KDE for smooth density estimation
             kde = gaussian_kde(valid_results)
@@ -451,16 +557,17 @@ def create_scenario_plots(all_forecaster_scenarios: dict[str, list[list[float]]]
         stats_text = []
         for name, all_results in all_forecaster_scenarios.items():
             results = all_results[scenario_idx]
-            # Calculate percentiles, marking >2050 as appropriate
+            # Calculate percentiles, marking >max_time as appropriate
+            max_time = config["simulation"]["max_time"]
             p10 = np.percentile(results, 10)
             p50 = np.percentile(results, 50)
             p90 = np.percentile(results, 90)
             
             stats = (
                 f"{name}:\n"
-                f"  10th: {format_year_month(p10) if p10 <= 2050 else '>2050'}\n"
-                f"  50th: {format_year_month(p50) if p50 <= 2050 else '>2050'}\n"
-                f"  90th: {format_year_month(p90) if p90 <= 2050 else '>2050'}"
+                f"  10th: {format_year_month(p10, max_time) if p10 <= max_time else f'>{int(max_time)}'}\n"
+                f"  50th: {format_year_month(p50, max_time) if p50 <= max_time else f'>{int(max_time)}'}\n"
+                f"  90th: {format_year_month(p90, max_time) if p90 <= max_time else f'>{int(max_time)}'}"
             )
             stats_text.append(stats)
         
@@ -468,9 +575,6 @@ def create_scenario_plots(all_forecaster_scenarios: dict[str, list[list[float]]]
                 transform=ax.transAxes,
                 verticalalignment="top",
                 horizontalalignment="left",
-                # bbox=dict(facecolor=bg_rgb, alpha=0.9,
-                #                 edgecolor=plotting_style["colors"]["human"]["dark"],
-                #                 linewidth=0.5),
                 fontsize=plotting_style["font"]["sizes"]["legend"])
         text.set_fontproperties(fonts['regular_legend'])
         
@@ -519,13 +623,13 @@ def create_distribution_plots(all_forecaster_samples: dict, config: dict, plotti
         "Horizon Length at\nSaturation (h_sat)":
             {"key": "h_sat", "unit": "hours", "convert": lambda x: x * 24 * 30},  # Convert months back to hours for display
         "Horizon Doubling\nTime at start (T)": 
-            {"key": "T_t", "unit": "months"},
+            {"key": "horizon_doubling_time", "unit": "months"},
         "Time to\nSaturation (t_sat)":
             {"key": "t_sat", "unit": "days"},
-        "Algorithmic Progress Rate at\nSaturation (v_algorithmic_sat)":
-            {"key": "v_algorithmic_sat", "unit": "x 2024 rate"},
-        "Algorithmic Progress Rate at\nSC (v_algorithmic_SC)":
-            {"key": "v_algorithmic_SC", "unit": "x 2024 rate"},
+        "Software Progress Rate at\nSaturation (v_software_sat)":
+            {"key": "v_software_sat", "unit": "x 2024 rate"},
+        "Software Progress Rate at\nSC (v_software_SC)":
+            {"key": "v_software_SC", "unit": "x 2024 rate"},
         "Horizon Length at\nSC (h_SC)":
             {"key": "h_SC", "unit": "months"},
         "Delay to become\npublic (d)":
@@ -581,9 +685,6 @@ def create_distribution_plots(all_forecaster_samples: dict, config: dict, plotti
             transform=ax.transAxes,
             verticalalignment="top",
             horizontalalignment="left",
-            # bbox=dict(facecolor=bg_rgb, alpha=0.9,
-            #         edgecolor=plotting_style["colors"]["human"]["dark"],
-            #         linewidth=0.5),
             fontsize=plotting_style["font"]["sizes"]["legend"])
     text.set_fontproperties(fonts['regular_legend'])
     
@@ -816,10 +917,10 @@ def plot_single_distribution(ax: plt.Axes, data: np.ndarray, color: str, label: 
             linewidth=2, alpha=0.8, zorder=2)
     ax.fill_between(x_range, density, color=color, alpha=0.1)
 
-def format_year_month(year_decimal: float) -> str:
+def format_year_month(year_decimal: float, max_time: float) -> str:
     """Convert decimal year to Month Year format."""
-    if year_decimal >= 2050:
-        return ">2050"
+    if year_decimal >= max_time:
+        return f">{int(max_time)}"
         
     year = int(year_decimal)
     month = int((year_decimal % 1) * 12) + 1
@@ -863,7 +964,7 @@ def run_and_plot_are_scenarios(config_path: str = "params.yaml") -> tuple[plt.Fi
         all_forecaster_samples[name] = samples
         
         # Run simulation
-        results = run_single_scenario(samples, sim_params)
+        results = run_single_scenario(samples, sim_params, forecaster_config, config["simulation"])
         all_forecaster_headline_results[name] = results
     
     print("\nGenerating plots...")
