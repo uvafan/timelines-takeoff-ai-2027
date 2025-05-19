@@ -538,7 +538,47 @@ def print_median_comparison(all_milestone_dates: list[list[datetime]], config: d
         else:
             median_of_diffs.append(float('nan'))
 
-def run_takeoff_simulation(config_path: str = "params.yaml") -> tuple[plt.Figure, dict]:
+def print_single_run_results(milestone_dates: list[datetime], phase_durations: list[float], start_date: datetime):
+    """Print results of a single simulation run in a readable format."""
+    print("\nSingle Run Results:")
+    print("=" * 50)
+    
+    # List of milestones in order
+    milestones = ["SC", "SAR", "SIAR", "ASI"]
+    milestone_full = ["Superhuman Coder", "Superhuman AI Researcher", "Superintelligent AI Researcher", "Generally Superintelligent"]
+    
+    # Print each phase duration
+    for i, (milestone, next_milestone) in enumerate(zip(milestones[:-1], milestones[1:])):
+        duration_days = phase_durations[i]
+        if duration_days == 0:
+            print(f"{milestone} to {next_milestone}: Capped at 1000 years")
+            continue
+            
+        # Convert to years, months, days
+        years = int(duration_days // 365)
+        remaining_days = duration_days % 365
+        months = int(remaining_days // 30.44)  # Average days per month
+        days = int(remaining_days % 30.44)
+        
+        # Format the duration string
+        duration_parts = []
+        if years > 0:
+            duration_parts.append(f"{years} year{'s' if years != 1 else ''}")
+        if months > 0:
+            duration_parts.append(f"{months} month{'s' if months != 1 else ''}")
+        if days > 0:
+            duration_parts.append(f"{days} day{'s' if days != 1 else ''}")
+            
+        duration_str = ", ".join(duration_parts)
+        
+        # Print milestone transition
+        print(f"\n{milestone} to {next_milestone}:")
+        print(f"  Duration: {duration_str}")
+        print(f"  From: {milestone_full[i]}")
+        print(f"  To: {milestone_full[i+1]}")
+        print(f"  Achieved by: {milestone_dates[i].strftime('%B %d, %Y')}")
+
+def run_takeoff_simulation(config_path: str = "params.yaml", single_run: bool = False) -> tuple[plt.Figure, dict]:
     """Run takeoff simulation and create visualizations."""
     print("Loading configuration...")
     config = load_config(config_path)
@@ -559,6 +599,11 @@ def run_takeoff_simulation(config_path: str = "params.yaml") -> tuple[plt.Figure
         milestone_dates, phase_durations = run_single_simulation_with_tracking(samples, i)
         all_milestone_dates.append(milestone_dates)
         all_phase_durations.append(phase_durations)
+        
+        # If single run mode, print results and return
+        if single_run:
+            print_single_run_results(milestone_dates, phase_durations, samples["start_time"])
+            return None, {"milestone_dates": [milestone_dates]}
     
     # Validate against explicit recalculation
     validate_phase_durations(all_milestone_dates, all_phase_durations, samples["start_time"])
@@ -629,5 +674,7 @@ def validate_phase_durations(all_milestone_dates, all_phase_durations, start_dat
                     first_mismatch = (sim_idx, phase_idx, stored, calculated)
 
 if __name__ == "__main__":
-    run_takeoff_simulation()
+    import sys
+    single_run = "--single-run" in sys.argv
+    run_takeoff_simulation(single_run=single_run)
     print(f"\nSimulation completed at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}") 
