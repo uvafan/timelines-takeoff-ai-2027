@@ -140,13 +140,14 @@ def get_milestone_samples(config: dict, n_sims: int, correlation: float = 0.7) -
     
     return samples
 
-def run_phase_simulation(gap: float, start_speed: float, end_speed: float, milestone_pair: str = None) -> float:
+def run_phase_simulation(gap: float, start_speed: float, end_speed: float, progress_rate: float = 1.0, milestone_pair: str = None) -> float:
     """Run simulation for a single phase with exponential speedup.
     
     Args:
         gap: Required progress in days
         start_speed: Initial speed multiplier v for this phase
         end_speed: Final speed multiplier v for this phase
+        progress_rate: Rate at which this actor makes progress (1.0 = normal, 0.3 = 30% speed)
         milestone_pair: String identifying which transition this is
         
     Returns:
@@ -164,8 +165,8 @@ def run_phase_simulation(gap: float, start_speed: float, end_speed: float, miles
         progress_ratio = progress / gap
         current_speedup = start_speed * (end_speed/start_speed)**progress_ratio
         
-        # Make progress at varying speed
-        progress += current_speedup * dt
+        # Make progress at varying speed, adjusted by progress_rate
+        progress += current_speedup * progress_rate * dt
         calendar_time += dt
         
         if calendar_time > MAX_CALENDAR_DAYS:
@@ -174,7 +175,7 @@ def run_phase_simulation(gap: float, start_speed: float, end_speed: float, miles
     
     return calendar_time
 
-def run_single_simulation_with_tracking(samples: dict, sim_idx: int) -> tuple[list[datetime], list[float]]:
+def run_single_simulation_with_tracking(samples: dict, sim_idx: int, progress_rate: float = 1.0) -> tuple[list[datetime], list[float]]:
     """Run a single simulation and track both milestone dates and phase durations."""
     milestone_dates = []
     phase_calendar_days = []
@@ -201,7 +202,7 @@ def run_single_simulation_with_tracking(samples: dict, sim_idx: int) -> tuple[li
             end_speed = samples["speeds"][next_milestone]
         
         # Run simulation for this phase with exponential speedup
-        calendar_days = run_phase_simulation(gap, start_speed, end_speed, milestone_pair)
+        calendar_days = run_phase_simulation(gap, start_speed, end_speed, progress_rate, milestone_pair)
         phase_calendar_days.append(calendar_days)
         
         try:
@@ -221,10 +222,44 @@ def run_single_simulation_with_tracking(samples: dict, sim_idx: int) -> tuple[li
     
     return milestone_dates, phase_calendar_days
 
-def run_single_simulation(samples: dict, sim_idx: int) -> list[datetime]:
+def run_single_simulation(samples: dict, sim_idx: int, progress_rate: float = 1.0) -> list[datetime]:
     """Run a single simulation and return milestone dates."""
-    milestone_dates, _ = run_single_simulation_with_tracking(samples, sim_idx)
+    milestone_dates, _ = run_single_simulation_with_tracking(samples, sim_idx, progress_rate)
     return milestone_dates
+
+def run_multi_project_simulation_with_tracking(samples: dict, sim_idx: int, projects: dict) -> tuple[dict, list[datetime], dict]:
+    """Run multi-project simulation with detailed tracking.
+    
+    Returns:
+        Tuple of (project_results, first_milestone_dates, project_phase_durations)
+    """
+    project_results = {}
+    project_phase_durations = {}
+    
+    # Run simulation for each project with tracking
+    for project_name, progress_rate in projects.items():
+        milestone_dates, phase_durations = run_single_simulation_with_tracking(samples, sim_idx, progress_rate)
+        project_results[project_name] = milestone_dates
+        project_phase_durations[project_name] = phase_durations
+    
+    # Find first achievement of each milestone across all projects
+    milestones = ["SAR", "SIAR", "ASI"]
+    first_milestone_dates = []
+    
+    for milestone_idx in range(len(milestones)):
+        earliest_date = None
+        for project_name in projects:
+            if milestone_idx < len(project_results[project_name]):
+                project_date = project_results[project_name][milestone_idx]
+                if earliest_date is None or project_date < earliest_date:
+                    earliest_date = project_date
+        
+        if earliest_date is not None:
+            first_milestone_dates.append(earliest_date)
+        else:
+            first_milestone_dates.append(datetime(9999, 12, 31))
+    
+    return project_results, first_milestone_dates, project_phase_durations
 
 def setup_plotting_style(plotting_style: dict):
     """Set up matplotlib style according to config."""
@@ -420,7 +455,7 @@ def create_phase_duration_plot(all_milestone_dates: list[list[datetime]], config
     # Define phases
     phase_names = ["SC to SAR", "SAR to SIAR", "SIAR to ASI"] # "ASI to WS"
     
-    phase_full = ["Superhuman Coder", "Superhuman AI Researcher", "Superintelligent AI Researcher", "Generally Superintelligent"]
+    phase_full = ["Superhuman Coder", "Superhuman AI Researcher", "Superintelligent AI Researcher", "Artificial Superintelligence"]
     # Define shades of green for the boxes
     colors = ['#228B22', '#228B22', '#228B22']  # Dark green, Forest green, Lime green
     
@@ -538,7 +573,306 @@ def print_median_comparison(all_milestone_dates: list[list[datetime]], config: d
         else:
             median_of_diffs.append(float('nan'))
 
-def run_takeoff_simulation(config_path: str = "params.yaml") -> tuple[plt.Figure, dict]:
+def create_multi_project_timeline_plot(all_first_milestone_dates: list[list[datetime]], all_project_results: list[dict], config: dict, plotting_style: dict, fonts: dict) -> plt.Figure:
+    """Create timeline plot showing milestone achievement distributions for multiple projects.
+    
+    Args:
+        all_first_milestone_dates: List of first-to-achieve milestone dates for each simulation
+        all_project_results: List of project results for each simulation
+        config: Configuration dictionary
+        plotting_style: Plotting style configuration
+        fonts: Font configuration
+    """
+    # Get background color
+    background_color = "#FFFEF8"
+    bg_rgb = tuple(int(background_color.lstrip('#')[i:i+2], 16)/255 for i in (0, 2, 4))
+    
+    fig = plt.figure(figsize=(12, 6), dpi=150, facecolor=bg_rgb)
+    ax = fig.add_subplot(111)
+    ax.set_facecolor(bg_rgb)
+    
+    # Project comparison - show SAR distributions for each project
+    projects = list(config["projects"].keys())
+    project_colors = plt.cm.Set3(np.linspace(0, 1, len(projects)))
+    
+    MAX_GRAPH_YEAR = 2032
+    start_year = float(config["starting_time"].split()[-1])
+    
+    # Plot SAR distributions for each project
+    stats_text = ""
+    for proj_idx, project_name in enumerate(projects):
+        project_sar_times = []
+        for sim_results in all_project_results:
+            if project_name in sim_results and len(sim_results[project_name]) > 0:
+                sar_date = sim_results[project_name][0]  # SAR is first milestone
+                sar_year = sar_date.year + sar_date.timetuple().tm_yday/365
+                if sar_year < 2100:  # Filter out capped values
+                    project_sar_times.append(sar_year)
+        
+        if project_sar_times and len(project_sar_times) > 10:  # Need enough data for KDE
+            # Calculate percentiles for stats
+            p10 = np.percentile(project_sar_times, 10)
+            p50 = np.percentile(project_sar_times, 50)
+            p90 = np.percentile(project_sar_times, 90)
+            
+            # Convert decimal years to month and year format for display
+            def year_to_date(year):
+                year_int = int(year)
+                if year_int > 9999:
+                    return f"{year_int}"
+                month = int((year - year_int) * 12) + 1
+                month_name = datetime(year_int, month, 1).strftime('%b')
+                return f"{month_name} {year_int}"
+            
+            # Filter data to visible range for KDE
+            visible_data = [x for x in project_sar_times if start_year <= x <= MAX_GRAPH_YEAR]
+            if visible_data:
+                # Calculate KDE on visible data
+                try:
+                    kde = gaussian_kde(visible_data)
+                    
+                    # Create x range for plotting
+                    x_range = np.linspace(start_year, MAX_GRAPH_YEAR, 1000)
+                    density = kde(x_range)
+                    
+                    # Normalize density
+                    density = density / np.sum(density) * (len(visible_data) / len(project_sar_times))
+                    
+                    # Plot distribution
+                    progress_rate = config["projects"][project_name]
+                    label = f"{project_name} ({progress_rate:.1f}x)"
+                    ax.plot(x_range, density, '-', color=project_colors[proj_idx], 
+                           label=label, linewidth=2, alpha=0.8)
+                    ax.fill_between(x_range, density, color=project_colors[proj_idx], alpha=0.2)
+                    
+                except (np.linalg.LinAlgError, ValueError):
+                    # KDE failed due to insufficient variance, use histogram instead
+                    progress_rate = config["projects"][project_name]
+                    label = f"{project_name} ({progress_rate:.1f}x)"
+                    
+                    # Create histogram
+                    bins = np.linspace(0, MAX_DELAY, 50)
+                    hist, bin_edges = np.histogram(visible_data, bins=bins, density=True)
+                    bin_centers = (bin_edges[:-1] + bin_edges[1:]) / 2
+                    
+                    # Plot as step function
+                    ax.step(bin_centers, hist, where='mid', color=project_colors[proj_idx], 
+                           label=label, linewidth=2, alpha=0.8)
+                    ax.fill_between(bin_centers, hist, step='mid', color=project_colors[proj_idx], alpha=0.2)
+                
+                # Add to stats text
+                if (p90 > 2100):
+                    stats = (
+                        f"{project_name} ({progress_rate:.1f}x):\n"
+                        f"  10th: {year_to_date(p10)}\n"
+                        f"  50th: {year_to_date(p50)}\n"
+                        f"  90th: >2100"
+                    )
+                else:
+                    stats = (
+                        f"{project_name} ({progress_rate:.1f}x):\n"
+                        f"  10th: {year_to_date(p10)}\n"
+                        f"  50th: {year_to_date(p50)}\n"
+                        f"  90th: {year_to_date(p90)}"
+                    )
+                
+                if proj_idx == 0:
+                    stats_text = stats
+                else:
+                    stats_text += f"\n\n{stats}"
+    
+    # Add stats text
+    text = ax.text(0.68, 1, stats_text,
+            transform=ax.transAxes,
+            verticalalignment='top',
+            horizontalalignment='left',
+            fontsize=plotting_style["font"]["sizes"]["small"])
+    text.set_fontproperties(fonts['regular_legend'])
+    
+    # Configure plot styling
+    ax.set_xlim(start_year, MAX_GRAPH_YEAR)
+    ax.set_ylim(0, None)
+    ax.set_xlabel("Year", fontsize=plotting_style["font"]["sizes"]["axis_labels"])
+    ax.set_ylabel("Probability Density", fontsize=plotting_style["font"]["sizes"]["axis_labels"])
+    ax.set_title("Multi-Project Comparison: Superhuman AI Researcher Achievement", 
+                 fontsize=plotting_style["font"]["sizes"]["title"], pad=10)
+    
+    # Add grid and styling
+    ax.grid(True, alpha=0.2, zorder=0)
+    ax.set_axisbelow(True)
+    ax.spines['top'].set_visible(False)
+    ax.spines['right'].set_visible(False)
+    
+    # Add legend
+    legend = ax.legend(loc='upper left', fontsize=plotting_style["font"]["sizes"]["legend"])
+    for text in legend.get_texts():
+        text.set_fontproperties(fonts['regular_legend'])
+    
+    # Configure ticks
+    ax.tick_params(axis="both", labelsize=plotting_style["font"]["sizes"]["ticks"])
+
+    return fig
+
+def create_project_delay_plot(all_project_results: list[dict], config: dict, plotting_style: dict, fonts: dict) -> plt.Figure:
+    """Create plot showing the delay between each project's SAR achievement and the leading project's SAR achievement.
+    
+    Args:
+        all_project_results: List of project results for each simulation
+        config: Configuration dictionary
+        plotting_style: Plotting style configuration
+        fonts: Font configuration
+    """
+    # Get background color
+    background_color = "#FFFEF8"
+    bg_rgb = tuple(int(background_color.lstrip('#')[i:i+2], 16)/255 for i in (0, 2, 4))
+    
+    fig = plt.figure(figsize=(12, 6), dpi=150, facecolor=bg_rgb)
+    ax = fig.add_subplot(111)
+    ax.set_facecolor(bg_rgb)
+    
+    projects = list(config["projects"].keys())
+    # Exclude Leading Lab from delay plot since it always has 0 delay
+    projects_for_delay = [p for p in projects if p != "Leading Lab"]
+    project_colors = plt.cm.Set3(np.linspace(0, 1, len(projects_for_delay)))
+    
+    # Calculate delays for each simulation
+    project_delays = {project: [] for project in projects_for_delay}
+    
+    for sim_idx, sim_results in enumerate(all_project_results):
+        # Find the earliest SAR date across all projects in this simulation
+        earliest_sar_date = None
+        valid_projects = {}
+        
+        for project_name in projects:
+            if project_name in sim_results and len(sim_results[project_name]) > 0:
+                sar_date = sim_results[project_name][0]  # SAR is first milestone
+                if sar_date.year < 9999:  # Filter out capped values
+                    valid_projects[project_name] = sar_date
+                    if earliest_sar_date is None or sar_date < earliest_sar_date:
+                        earliest_sar_date = sar_date
+        
+        # Calculate delays relative to earliest
+        if earliest_sar_date is not None:
+            for project_name in projects_for_delay:
+                if project_name in valid_projects:
+                    delay_days = (valid_projects[project_name] - earliest_sar_date).days
+                    delay_years = delay_days / 365.0
+                    project_delays[project_name].append(delay_years)
+    
+    # Plot delay distributions for each project
+    stats_text = ""
+    for proj_idx, project_name in enumerate(projects_for_delay):
+        delays = project_delays[project_name]
+        
+        if delays and len(delays) > 10:  # Need enough data for KDE
+            # Calculate percentiles for stats
+            p10 = np.percentile(delays, 10)
+            p50 = np.percentile(delays, 50)
+            p90 = np.percentile(delays, 90)
+            
+            # Determine appropriate x-axis range based on the data
+            max_delay_in_data = max(delays)
+            MAX_DELAY = min(max(5, max_delay_in_data * 1.1), 20)  # Adaptive range, cap at 20 years
+            
+            # Filter data to reasonable range for visualization
+            visible_data = [x for x in delays if 0 <= x <= MAX_DELAY]
+            
+            if visible_data:
+                # Calculate KDE on visible data using same approach as multi-project plot
+                try:
+                    kde = gaussian_kde(visible_data)
+                    
+                    # Create x range for plotting (same resolution as multi-project plot)
+                    x_range = np.linspace(0, MAX_DELAY, 1000)
+                    density = kde(x_range)
+                    
+                    # Normalize density (same approach as multi-project plot)
+                    density = density / np.sum(density) * (len(visible_data) / len(delays))
+                    
+                    # Plot distribution
+                    progress_rate = config["projects"][project_name]
+                    label = f"{project_name} ({progress_rate:.1f}x)"
+                    ax.plot(x_range, density, '-', color=project_colors[proj_idx], 
+                           label=label, linewidth=2, alpha=0.8)
+                    ax.fill_between(x_range, density, color=project_colors[proj_idx], alpha=0.2)
+                    
+                except (np.linalg.LinAlgError, ValueError):
+                    # KDE failed, use histogram instead
+                    progress_rate = config["projects"][project_name]
+                    label = f"{project_name} ({progress_rate:.1f}x)"
+                    
+                    # Create histogram
+                    bins = np.linspace(0, MAX_DELAY, 50)
+                    hist, bin_edges = np.histogram(visible_data, bins=bins, density=True)
+                    bin_centers = (bin_edges[:-1] + bin_edges[1:]) / 2
+                    
+                    # Plot as step function
+                    ax.step(bin_centers, hist, where='mid', color=project_colors[proj_idx], 
+                           label=label, linewidth=2, alpha=0.8)
+                    ax.fill_between(bin_centers, hist, step='mid', color=project_colors[proj_idx], alpha=0.2)
+                
+                # Add to stats text
+                if p90 > MAX_DELAY:
+                    stats = (
+                        f"{project_name} ({progress_rate:.1f}x):\n"
+                        f"  10th: {p10:.2f} yrs\n"
+                        f"  50th: {p50:.2f} yrs\n"
+                        f"  90th: >{MAX_DELAY:.0f} yrs"
+                    )
+                else:
+                    stats = (
+                        f"{project_name} ({progress_rate:.1f}x):\n"
+                        f"  10th: {p10:.2f} yrs\n"
+                        f"  50th: {p50:.2f} yrs\n"
+                        f"  90th: {p90:.2f} yrs"
+                    )
+                
+                if proj_idx == 0:
+                    stats_text = stats
+                else:
+                    stats_text += f"\n\n{stats}"
+    
+    # Determine final x-axis limit based on actual data
+    all_delays = [delay for delays in project_delays.values() for delay in delays]
+    if all_delays:
+        data_max = np.percentile(all_delays, 95)  # Use 95th percentile to avoid outliers
+        final_xlim = min(max(3, data_max * 1.2), 15)  # Reasonable range
+    else:
+        final_xlim = 10
+    
+    # Add stats text
+    text = ax.text(0.68, 1, stats_text,
+            transform=ax.transAxes,
+            verticalalignment='top',
+            horizontalalignment='left',
+            fontsize=plotting_style["font"]["sizes"]["small"])
+    text.set_fontproperties(fonts['regular_legend'])
+    
+    # Configure plot styling
+    ax.set_xlim(0, final_xlim)
+    ax.set_ylim(0, None)
+    ax.set_xlabel("Delay Behind Leading Project (Years)", fontsize=plotting_style["font"]["sizes"]["axis_labels"])
+    ax.set_ylabel("Probability Density", fontsize=plotting_style["font"]["sizes"]["axis_labels"])
+    ax.set_title("Project SAR Achievement Delays Relative to Leading Project", 
+                 fontsize=plotting_style["font"]["sizes"]["title"], pad=10)
+    
+    # Add grid and styling
+    ax.grid(True, alpha=0.2, zorder=0)
+    ax.set_axisbelow(True)
+    ax.spines['top'].set_visible(False)
+    ax.spines['right'].set_visible(False)
+    
+    # Add legend
+    legend = ax.legend(loc='upper right', fontsize=plotting_style["font"]["sizes"]["legend"])
+    for text in legend.get_texts():
+        text.set_fontproperties(fonts['regular_legend'])
+    
+    # Configure ticks
+    ax.tick_params(axis="both", labelsize=plotting_style["font"]["sizes"]["ticks"])
+
+    return fig
+
+def run_takeoff_simulation(config_path: str = "takeoff_params.yaml") -> tuple[plt.Figure, dict]:
     """Run takeoff simulation and create visualizations."""
     print("Loading configuration...")
     config = load_config(config_path)
@@ -628,6 +962,87 @@ def validate_phase_durations(all_milestone_dates, all_phase_durations, start_dat
                 if first_mismatch is None:
                     first_mismatch = (sim_idx, phase_idx, stored, calculated)
 
+def run_multi_project_takeoff_simulation(config_path: str = "takeoff_params.yaml") -> tuple[plt.Figure, dict]:
+    """Run multi-project takeoff simulation and create visualizations."""
+    print("Loading configuration...")
+    config = load_config(config_path)
+    plotting_style = config["plotting_style"]
+    
+    # Check if projects are defined in config
+    if "projects" not in config:
+        print("No projects defined in config. Running single-project simulation instead.")
+        return run_takeoff_simulation(config_path)
+    
+    projects = config["projects"]
+    print(f"Running simulation with {len(projects)} projects:")
+    for name, rate in projects.items():
+        print(f"  {name}: {rate:.1f}x progress rate")
+    
+    # Set up fonts
+    fonts = setup_plotting_style(plotting_style)
+    
+    # Generate samples (shared across all projects)
+    print("\nGenerating samples...")
+    samples = get_milestone_samples(config, config["simulation"]["n_sims"])
+    
+    # Run multi-project simulations
+    print("\nRunning multi-project simulations...")
+    all_first_milestone_dates = []
+    all_project_results = []
+    all_project_phase_durations = []
+    
+    for i in tqdm(range(config["simulation"]["n_sims"]), desc="Simulations"):
+        project_results, first_milestone_dates, project_phase_durations = run_multi_project_simulation_with_tracking(samples, i, projects)
+        all_first_milestone_dates.append(first_milestone_dates)
+        all_project_results.append(project_results)
+        all_project_phase_durations.append(project_phase_durations)
+    
+    # Print summary statistics
+    print("\nFirst-to-achieve milestone statistics:")
+    milestones = ["SAR", "SIAR", "ASI"]
+    for i, milestone in enumerate(milestones):
+        milestone_years = [dates[i].year + dates[i].timetuple().tm_yday/365 
+                          for dates in all_first_milestone_dates 
+                          if i < len(dates) and dates[i].year < 9999]
+        
+        if milestone_years:
+            p10 = np.percentile(milestone_years, 10)
+            p50 = np.percentile(milestone_years, 50)
+            p90 = np.percentile(milestone_years, 90)
+            print(f"{milestone}: 10th={p10:.1f}, 50th={p50:.1f}, 90th={p90:.1f}")
+        else:
+            print(f"{milestone}: No valid data")
+    
+    # Create plots
+    print("\nGenerating plots...")
+    fig_multi_timeline = create_multi_project_timeline_plot(all_first_milestone_dates, all_project_results, config, plotting_style, fonts)
+    fig_project_delays = create_project_delay_plot(all_project_results, config, plotting_style, fonts)
+    
+    # Also create single-project plots for the fastest project (for comparison)
+    fastest_project = min(projects.keys(), key=lambda x: 1/projects[x])  # Highest progress rate
+    fastest_milestone_dates = [results[fastest_project] for results in all_project_results]
+    fig_fastest_timeline = create_milestone_timeline_plot(fastest_milestone_dates, config, plotting_style, fonts)
+    fig_fastest_phases = create_phase_duration_plot(fastest_milestone_dates, config, plotting_style, fonts)
+    
+    # Create output directory if it doesn't exist
+    output_dir = Path("figures")
+    output_dir.mkdir(parents=True, exist_ok=True)
+    
+    print("\nSaving plots...")
+    fig_multi_timeline.savefig(output_dir / "multi_project_takeoff_timeline.png", dpi=300, bbox_inches="tight")
+    fig_project_delays.savefig(output_dir / "project_sar_delays.png", dpi=300, bbox_inches="tight")
+    fig_fastest_timeline.savefig(output_dir / f"fastest_project_{fastest_project.replace(' ', '_')}_timeline.png", dpi=300, bbox_inches="tight")
+    fig_fastest_phases.savefig(output_dir / f"fastest_project_{fastest_project.replace(' ', '_')}_phases.png", dpi=300, bbox_inches="tight")
+    
+    # Close figures to free memory
+    plt.close("all")
+    
+    return fig_multi_timeline, {
+        "first_milestone_dates": all_first_milestone_dates,
+        "project_results": all_project_results,
+        "project_phase_durations": all_project_phase_durations
+    }
+
 if __name__ == "__main__":
-    run_takeoff_simulation()
+    run_multi_project_takeoff_simulation()
     print(f"\nSimulation completed at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}") 

@@ -16,9 +16,18 @@ speedups:
   ASI: 2000
   WS: 10000 # currently unused
 
+# Projects/actors configuration
+# Each project has a progress_rate that represents how much of a slowdown there is
+# For example, 0.3 means progress goes at 30% of normal rate (3x slower)
+projects:
+  "Leading Lab": 1.0      # Normal speed (baseline)
+  "Second Lab": 0.7       # 70% of normal speed
+  "Third Lab": 0.5        # 50% of normal speed
+  "Academic Project": 0.3 # 30% of normal speed
+
 # Simulation parameters
 simulation:
-  n_sims: 5000 # Should be 5000 for full simulation
+  n_sims: 50 # Should be 5000 for full simulation
   dt: 1  # days
 
 # Plotting style configuration
