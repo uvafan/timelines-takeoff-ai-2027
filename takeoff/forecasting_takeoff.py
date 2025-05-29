@@ -30,6 +30,33 @@ def get_lognormal_from_80_ci(lower_bound, upper_bound):
     # Return the lognormal distribution
     return lognorm(s=sigma, scale=np.exp(mu))
 
+def get_project_progress_samples(config: dict, n_sims: int) -> dict:
+    """Generate progress rate samples for each project using lognormal distributions with ceilings."""
+    project_samples = {}
+    
+    for project_name, params in config["projects"].items():
+        # Check if using new lognormal format or old fixed format
+        if isinstance(params, dict) and "lower_bound" in params:
+            # New lognormal format
+            lower_bound = params["lower_bound"]
+            upper_bound = params["upper_bound"]
+            ceiling = params["ceiling"]
+            
+            # Generate lognormal samples
+            dist = get_lognormal_from_80_ci(lower_bound, upper_bound)
+            samples = dist.rvs(n_sims)
+            
+            # Apply ceiling constraint
+            samples = np.minimum(samples, ceiling)
+            
+            project_samples[project_name] = samples
+        else:
+            # Old fixed format - create array of identical values
+            fixed_rate = params if isinstance(params, (int, float)) else 1.0
+            project_samples[project_name] = np.full(n_sims, fixed_rate)
+    
+    return project_samples
+
 def get_milestone_samples(config: dict, n_sims: int, correlation: float = 0.7) -> dict:
     """Generate samples for milestone timings and speeds with correlation between gap sizes."""
     samples = {}
@@ -227,8 +254,13 @@ def run_single_simulation(samples: dict, sim_idx: int, progress_rate: float = 1.
     milestone_dates, _ = run_single_simulation_with_tracking(samples, sim_idx, progress_rate)
     return milestone_dates
 
-def run_multi_project_simulation_with_tracking(samples: dict, sim_idx: int, projects: dict) -> tuple[dict, list[datetime], dict]:
+def run_multi_project_simulation_with_tracking(samples: dict, sim_idx: int, project_progress_samples: dict) -> tuple[dict, list[datetime], dict]:
     """Run multi-project simulation with detailed tracking.
+    
+    Args:
+        samples: Milestone timing samples
+        sim_idx: Simulation index
+        project_progress_samples: Dictionary mapping project names to arrays of progress rate samples
     
     Returns:
         Tuple of (project_results, first_milestone_dates, project_phase_durations)
@@ -237,7 +269,8 @@ def run_multi_project_simulation_with_tracking(samples: dict, sim_idx: int, proj
     project_phase_durations = {}
     
     # Run simulation for each project with tracking
-    for project_name, progress_rate in projects.items():
+    for project_name, progress_rate_samples in project_progress_samples.items():
+        progress_rate = progress_rate_samples[sim_idx]  # Get rate for this simulation
         milestone_dates, phase_durations = run_single_simulation_with_tracking(samples, sim_idx, progress_rate)
         project_results[project_name] = milestone_dates
         project_phase_durations[project_name] = phase_durations
@@ -248,7 +281,7 @@ def run_multi_project_simulation_with_tracking(samples: dict, sim_idx: int, proj
     
     for milestone_idx in range(len(milestones)):
         earliest_date = None
-        for project_name in projects:
+        for project_name in project_progress_samples:
             if milestone_idx < len(project_results[project_name]):
                 project_date = project_results[project_name][milestone_idx]
                 if earliest_date is None or project_date < earliest_date:
@@ -639,16 +672,31 @@ def create_multi_project_timeline_plot(all_first_milestone_dates: list[list[date
                     density = density / np.sum(density) * (len(visible_data) / len(project_sar_times))
                     
                     # Plot distribution
-                    progress_rate = config["projects"][project_name]
-                    label = f"{project_name} ({progress_rate:.1f}x)"
+                    project_params = config["projects"][project_name]
+                    if isinstance(project_params, dict) and "lower_bound" in project_params:
+                        # New format - show median of range
+                        median_rate = (project_params["lower_bound"] + project_params["upper_bound"]) / 2
+                        rate_label = f"~{median_rate:.1f}x"
+                    else:
+                        # Old format - show fixed rate
+                        progress_rate = project_params if isinstance(project_params, (int, float)) else 1.0
+                        rate_label = f"{progress_rate:.1f}x"
+                    
                     ax.plot(x_range, density, '-', color=project_colors[proj_idx], 
-                           label=label, linewidth=2, alpha=0.8)
+                           label=f"{project_name} ({rate_label})", linewidth=2, alpha=0.8)
                     ax.fill_between(x_range, density, color=project_colors[proj_idx], alpha=0.2)
                     
                 except (np.linalg.LinAlgError, ValueError):
                     # KDE failed due to insufficient variance, use histogram instead
-                    progress_rate = config["projects"][project_name]
-                    label = f"{project_name} ({progress_rate:.1f}x)"
+                    project_params = config["projects"][project_name]
+                    if isinstance(project_params, dict) and "lower_bound" in project_params:
+                        # New format - show median of range
+                        median_rate = (project_params["lower_bound"] + project_params["upper_bound"]) / 2
+                        rate_label = f"~{median_rate:.1f}x"
+                    else:
+                        # Old format - show fixed rate
+                        progress_rate = project_params if isinstance(project_params, (int, float)) else 1.0
+                        rate_label = f"{progress_rate:.1f}x"
                     
                     # Create histogram
                     bins = np.linspace(0, MAX_DELAY, 50)
@@ -657,20 +705,20 @@ def create_multi_project_timeline_plot(all_first_milestone_dates: list[list[date
                     
                     # Plot as step function
                     ax.step(bin_centers, hist, where='mid', color=project_colors[proj_idx], 
-                           label=label, linewidth=2, alpha=0.8)
+                           label=f"{project_name} ({rate_label})", linewidth=2, alpha=0.8)
                     ax.fill_between(bin_centers, hist, step='mid', color=project_colors[proj_idx], alpha=0.2)
                 
                 # Add to stats text
                 if (p90 > 2100):
                     stats = (
-                        f"{project_name} ({progress_rate:.1f}x):\n"
+                        f"{project_name} ({rate_label}):\n"
                         f"  10th: {year_to_date(p10)}\n"
                         f"  50th: {year_to_date(p50)}\n"
                         f"  90th: >2100"
                     )
                 else:
                     stats = (
-                        f"{project_name} ({progress_rate:.1f}x):\n"
+                        f"{project_name} ({rate_label}):\n"
                         f"  10th: {year_to_date(p10)}\n"
                         f"  50th: {year_to_date(p50)}\n"
                         f"  90th: {year_to_date(p90)}"
@@ -790,16 +838,31 @@ def create_project_delay_plot(all_project_results: list[dict], config: dict, plo
                     density = density / np.sum(density) * (len(visible_data) / len(delays))
                     
                     # Plot distribution
-                    progress_rate = config["projects"][project_name]
-                    label = f"{project_name} ({progress_rate:.1f}x)"
+                    project_params = config["projects"][project_name]
+                    if isinstance(project_params, dict) and "lower_bound" in project_params:
+                        # New format - show median of range
+                        median_rate = (project_params["lower_bound"] + project_params["upper_bound"]) / 2
+                        rate_label = f"~{median_rate:.1f}x"
+                    else:
+                        # Old format - show fixed rate
+                        progress_rate = project_params if isinstance(project_params, (int, float)) else 1.0
+                        rate_label = f"{progress_rate:.1f}x"
+                    
                     ax.plot(x_range, density, '-', color=project_colors[proj_idx], 
-                           label=label, linewidth=2, alpha=0.8)
+                           label=f"{project_name} ({rate_label})", linewidth=2, alpha=0.8)
                     ax.fill_between(x_range, density, color=project_colors[proj_idx], alpha=0.2)
                     
                 except (np.linalg.LinAlgError, ValueError):
                     # KDE failed, use histogram instead
-                    progress_rate = config["projects"][project_name]
-                    label = f"{project_name} ({progress_rate:.1f}x)"
+                    project_params = config["projects"][project_name]
+                    if isinstance(project_params, dict) and "lower_bound" in project_params:
+                        # New format - show median of range
+                        median_rate = (project_params["lower_bound"] + project_params["upper_bound"]) / 2
+                        rate_label = f"~{median_rate:.1f}x"
+                    else:
+                        # Old format - show fixed rate
+                        progress_rate = project_params if isinstance(project_params, (int, float)) else 1.0
+                        rate_label = f"{progress_rate:.1f}x"
                     
                     # Create histogram
                     bins = np.linspace(0, MAX_DELAY, 50)
@@ -808,20 +871,20 @@ def create_project_delay_plot(all_project_results: list[dict], config: dict, plo
                     
                     # Plot as step function
                     ax.step(bin_centers, hist, where='mid', color=project_colors[proj_idx], 
-                           label=label, linewidth=2, alpha=0.8)
+                           label=f"{project_name} ({rate_label})", linewidth=2, alpha=0.8)
                     ax.fill_between(bin_centers, hist, step='mid', color=project_colors[proj_idx], alpha=0.2)
                 
                 # Add to stats text
                 if p90 > MAX_DELAY:
                     stats = (
-                        f"{project_name} ({progress_rate:.1f}x):\n"
+                        f"{project_name} ({rate_label}):\n"
                         f"  10th: {p10:.2f} yrs\n"
                         f"  50th: {p50:.2f} yrs\n"
                         f"  90th: >{MAX_DELAY:.0f} yrs"
                     )
                 else:
                     stats = (
-                        f"{project_name} ({progress_rate:.1f}x):\n"
+                        f"{project_name} ({rate_label}):\n"
                         f"  10th: {p10:.2f} yrs\n"
                         f"  50th: {p50:.2f} yrs\n"
                         f"  90th: {p90:.2f} yrs"
@@ -944,7 +1007,6 @@ def validate_phase_durations(all_milestone_dates, all_phase_durations, start_dat
         calculated_durations.append(durations)
     
     # Compare with stored durations
-    all_match = True
     first_mismatch = None
     
     for sim_idx in range(len(all_milestone_dates)):
@@ -958,7 +1020,6 @@ def validate_phase_durations(all_milestone_dates, all_phase_durations, start_dat
                 
             # Due to floating point, there might be tiny differences
             if abs(stored - calculated) > 0.1:  # Allow small difference
-                all_match = False
                 if first_mismatch is None:
                     first_mismatch = (sim_idx, phase_idx, stored, calculated)
 
@@ -973,16 +1034,23 @@ def run_multi_project_takeoff_simulation(config_path: str = "takeoff_params.yaml
         print("No projects defined in config. Running single-project simulation instead.")
         return run_takeoff_simulation(config_path)
     
-    projects = config["projects"]
-    print(f"Running simulation with {len(projects)} projects:")
-    for name, rate in projects.items():
-        print(f"  {name}: {rate:.1f}x progress rate")
+    # Generate project progress rate samples
+    print("\nGenerating project progress rate samples...")
+    project_progress_samples = get_project_progress_samples(config, config["simulation"]["n_sims"])
+    
+    # Print statistics for progress rates
+    print("Project progress rate distributions:")
+    for project_name, samples in project_progress_samples.items():
+        p10 = np.percentile(samples, 10)
+        p50 = np.percentile(samples, 50)
+        p90 = np.percentile(samples, 90)
+        print(f"  {project_name}: 10th={p10:.2f}x, 50th={p50:.2f}x, 90th={p90:.2f}x")
     
     # Set up fonts
     fonts = setup_plotting_style(plotting_style)
     
     # Generate samples (shared across all projects)
-    print("\nGenerating samples...")
+    print("\nGenerating milestone samples...")
     samples = get_milestone_samples(config, config["simulation"]["n_sims"])
     
     # Run multi-project simulations
@@ -992,7 +1060,7 @@ def run_multi_project_takeoff_simulation(config_path: str = "takeoff_params.yaml
     all_project_phase_durations = []
     
     for i in tqdm(range(config["simulation"]["n_sims"]), desc="Simulations"):
-        project_results, first_milestone_dates, project_phase_durations = run_multi_project_simulation_with_tracking(samples, i, projects)
+        project_results, first_milestone_dates, project_phase_durations = run_multi_project_simulation_with_tracking(samples, i, project_progress_samples)
         all_first_milestone_dates.append(first_milestone_dates)
         all_project_results.append(project_results)
         all_project_phase_durations.append(project_phase_durations)
@@ -1019,7 +1087,7 @@ def run_multi_project_takeoff_simulation(config_path: str = "takeoff_params.yaml
     fig_project_delays = create_project_delay_plot(all_project_results, config, plotting_style, fonts)
     
     # Also create single-project plots for the fastest project (for comparison)
-    fastest_project = min(projects.keys(), key=lambda x: 1/projects[x])  # Highest progress rate
+    fastest_project = min(project_progress_samples.keys(), key=lambda x: 1/project_progress_samples[x])  # Highest progress rate
     fastest_milestone_dates = [results[fastest_project] for results in all_project_results]
     fig_fastest_timeline = create_milestone_timeline_plot(fastest_milestone_dates, config, plotting_style, fonts)
     fig_fastest_phases = create_phase_duration_plot(fastest_milestone_dates, config, plotting_style, fonts)

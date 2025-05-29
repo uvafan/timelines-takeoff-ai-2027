@@ -17,13 +17,26 @@ speedups:
   WS: 10000 # currently unused
 
 # Projects/actors configuration
-# Each project has a progress_rate that represents how much of a slowdown there is
-# For example, 0.3 means progress goes at 30% of normal rate (3x slower)
+# Each project has a progress_rate sampled from lognormal distribution
+# Format: [lower_bound, upper_bound, ceiling] for 80% confidence interval
+# ceiling: maximum allowed progress rate (hard cap)
 projects:
-  "Leading Lab": 1.0      # Normal speed (baseline)
-  "Second Lab": 0.7       # 70% of normal speed
-  "Third Lab": 0.5        # 50% of normal speed
-  "Academic Project": 0.3 # 30% of normal speed
+  "Leading Lab": 
+    lower_bound: 0.8
+    upper_bound: 1.2
+    ceiling: 1.5
+  "Second Lab": 
+    lower_bound: 0.5
+    upper_bound: 0.9
+    ceiling: 1.0
+  "Third Lab": 
+    lower_bound: 0.3
+    upper_bound: 0.7
+    ceiling: 0.8
+  "Academic Project": 
+    lower_bound: 0.2
+    upper_bound: 0.4
+    ceiling: 0.5
 
 # Simulation parameters
 simulation:
