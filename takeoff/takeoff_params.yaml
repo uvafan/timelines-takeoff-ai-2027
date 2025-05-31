@@ -3,6 +3,7 @@ starting_time: "March 31 2027"
 # Time gaps between milestones in years
 # Format: [p_zero, lower_bound, upper_bound]
 times:
+  "PRESENT_DAY to SC": [0, 5, 5]  # Fixed 5 year gap
   "SC to SAR": [0.15, 1.5, 10]
   "SAR to SIAR": [0, 2, 250] # currently unused
   "SIAR to ASI": [0, 3, 500] # currently unused
@@ -10,6 +11,7 @@ times:
 
 # Speed multipliers at each milestone
 speedups:
+  PRESENT_DAY: 1.02
   SC: 5
   SAR: 25
   SIAR: 250
@@ -20,23 +22,28 @@ speedups:
 # Each project has a progress_rate sampled from lognormal distribution
 # Format: [lower_bound, upper_bound, ceiling] for 80% confidence interval
 # ceiling: maximum allowed progress rate (hard cap)
+# starting_position: how much of the PRESENT_DAY to SC gap has been crossed (0-5 years)
 projects:
   "Leading Lab": 
     lower_bound: 0.8
     upper_bound: 1.2
     ceiling: 1.5
+    starting_position: 5  # Starts at SC
   "Second Lab": 
     lower_bound: 0.5
     upper_bound: 0.9
     ceiling: 1.0
+    starting_position: 2.0  # 2 years into PRESENT_DAY to SC
   "Third Lab": 
     lower_bound: 0.3
     upper_bound: 0.7
     ceiling: 0.8
+    starting_position: 1.5  # 1.5 years into PRESENT_DAY to SC
   "Academic Project": 
     lower_bound: 0.2
     upper_bound: 0.4
     ceiling: 0.5
+    starting_position: 1.0  # 1 year into PRESENT_DAY to SC
 
 # Simulation parameters
 simulation:
