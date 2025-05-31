@@ -344,6 +344,11 @@ def run_single_scenario(samples: dict, params: dict, forecaster_config: dict, si
             if g_t >= g_SC[i]:
                 completion_time = t
                 completion_time -= samples["d"][i]/12  # Convert months to years
+                
+                # Print research stock if completion is in 2027
+                # if 2027 <= completion_time < 2028:
+                #     print(f"Simulation {i}: Research stock at completion in {completion_time:.2f}: {current_research_stock:.2e}")
+                
                 successful_times.append(completion_time)
                 break
                 
