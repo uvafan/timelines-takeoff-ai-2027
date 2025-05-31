@@ -751,12 +751,18 @@ def create_multi_project_timeline_plot(all_first_milestone_dates: list[list[date
                                 jittered_data.append(d + np.random.normal(0, 0.01))  # Small jitter
                             else:
                                 jittered_data.append(d)
-                        kde = gaussian_kde(jittered_data)
+                        # Check if we have enough distinct values after jittering
+                        if len(set(jittered_data)) > 1:
+                            kde = gaussian_kde(jittered_data)
+                        else:
+                            raise ValueError("Insufficient data variation for KDE")
                     else:
                         kde = gaussian_kde(visible_data)
                     
                     # Create x range for plotting
-                    x_range = np.linspace(start_year, MAX_GRAPH_YEAR, 1000)
+                    max_delay_in_data = max(project_sar_times)
+                    MAX_DELAY = max(2.0, min(max(5, max_delay_in_data * 1.2), 20))  # Ensure at least 2 years range
+                    x_range = np.linspace(0, MAX_DELAY, 1000)
                     density = kde(x_range)
                     
                     # Normalize density - fix division by zero
@@ -793,15 +799,27 @@ def create_multi_project_timeline_plot(all_first_milestone_dates: list[list[date
                         progress_rate = project_params if isinstance(project_params, (int, float)) else 1.0
                         rate_label = f"{progress_rate:.1f}x"
                     
-                    # Create histogram
-                    bins = np.linspace(0, MAX_DELAY, 50)
-                    hist, bin_edges = np.histogram(visible_data, bins=bins, density=True)
-                    bin_centers = (bin_edges[:-1] + bin_edges[1:]) / 2
-                    
-                    # Plot as step function
-                    ax.step(bin_centers, hist, where='mid', color=project_colors[proj_idx], 
-                           label=f"{project_name} ({rate_label})", linewidth=2, alpha=0.8)
-                    ax.fill_between(bin_centers, hist, step='mid', color=project_colors[proj_idx], alpha=0.2)
+                    # Create histogram - fix MAX_DELAY undefined error
+                    if len(visible_data) > 0:
+                        data_min = min(visible_data)
+                        data_max = max(visible_data)
+                        if data_max > data_min:
+                            bins = np.linspace(data_min, data_max, 20)
+                            hist, bin_edges = np.histogram(visible_data, bins=bins, density=True)
+                            bin_centers = (bin_edges[:-1] + bin_edges[1:]) / 2
+                            
+                            # Plot as step function
+                            ax.step(bin_centers, hist, where='mid', color=project_colors[proj_idx], 
+                                   label=f"{project_name} ({rate_label})", linewidth=2, alpha=0.8)
+                            ax.fill_between(bin_centers, hist, step='mid', color=project_colors[proj_idx], alpha=0.2)
+                        else:
+                            # All values are the same, plot a vertical line
+                            ax.axvline(x=data_min, color=project_colors[proj_idx], linestyle='--', linewidth=2,
+                                     alpha=0.8, label=f"{project_name} ({rate_label}) - Consistent")
+                    else:
+                        # No data to plot
+                        print(f"Warning: No data to plot for {project_name}")
+                        continue
                 
                 # Add to stats text
                 if (p90 > 2100):
@@ -993,17 +1011,31 @@ def create_project_delay_plot(all_project_results: list[dict], config: dict, plo
                 # Filter data to reasonable range for visualization (include all data since delays are small)
                 visible_data = delays  # Don't filter small delays out
                 
-                if visible_data and len(visible_data) > 1:
+                if visible_data and len(visible_data) > 10:  # Need enough data for KDE
                     # Calculate KDE on visible data using same approach as multi-project plot
                     try:
-                        # For projects with some variation, use standard KDE
-                        kde = gaussian_kde(visible_data)
+                        # Special case: if most delays are 0, add small jitter for visualization
+                        if len([d for d in visible_data if d == 0]) > len(visible_data) * 0.5:
+                            # Add tiny random jitter to zero values for visualization
+                            jittered_data = []
+                            for d in visible_data:
+                                if d == 0:
+                                    jittered_data.append(d + np.random.normal(0, 0.01))  # Small jitter
+                                else:
+                                    jittered_data.append(d)
+                            # Check if we have enough distinct values after jittering
+                            if len(set(jittered_data)) > 1:
+                                kde = gaussian_kde(jittered_data)
+                            else:
+                                raise ValueError("Insufficient data variation for KDE")
+                        else:
+                            kde = gaussian_kde(visible_data)
                         
-                        # Create x range for plotting (same resolution as multi-project plot)
+                        # Create x range for plotting
                         x_range = np.linspace(0, MAX_DELAY, 1000)
                         density = kde(x_range)
                         
-                        # Normalize density (same approach as multi-project plot) - fix division by zero
+                        # Normalize density - fix division by zero
                         density_sum = np.sum(density)
                         if density_sum > 0:
                             density = density / density_sum * (len(visible_data) / len(delays))

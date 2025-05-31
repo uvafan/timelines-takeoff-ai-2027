@@ -33,7 +33,7 @@ projects:
     lower_bound: 0.5
     upper_bound: 0.9
     ceiling: 1.0
-    starting_position: 4.0  # 2 years into PRESENT_DAY to SC
+    starting_position: 4.0  # 4 years into PRESENT_DAY to SC
   "Third Lab": 
     lower_bound: 0.3
     upper_bound: 0.7
