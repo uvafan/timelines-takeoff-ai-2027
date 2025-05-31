@@ -434,8 +434,12 @@ def create_milestone_timeline_plot(all_milestone_dates: list[list[datetime]], co
         x_range = np.linspace(start_year, MAX_GRAPH_YEAR, 200000)
         density = kde(x_range)
         
-        # Normalize density to sum to 1 over visible range
-        density = density / np.sum(density) * (len(visible_data) / len(milestone_data))
+        # Normalize density to sum to 1 over visible range - fix division by zero
+        density_sum = np.sum(density)
+        if density_sum > 0:
+            density = density / density_sum * (len(visible_data) / len(milestone_data))
+        else:
+            density = np.zeros_like(density)  # Fallback if density is all zeros
         
         # Plot with different colors for each milestone
         colors = ["#900000", "#004000", "#000090"]
@@ -520,20 +524,33 @@ def create_phase_duration_plot(all_milestone_dates: list[list[datetime]], config
     start_date = datetime.strptime(config["starting_time"], "%B %d %Y")
     
     for sim_dates in all_milestone_dates:
-        # Include start date
-        dates = [start_date] + sim_dates
+        # sim_dates should contain [SC_date, SAR_date, SIAR_date, ASI_date]
+        # We want to calculate durations for: SC to SAR, SAR to SIAR, SIAR to ASI
         durations = []
         
-        # Calculate durations in years
-        for i in range(len(dates) - 1):
-            delta = dates[i+1] - dates[i]
-            years = delta.days / 365.0
-            durations.append(years)
+        # Calculate durations in years between consecutive milestones
+        for i in range(len(sim_dates) - 1):
+            if i + 1 < len(sim_dates):  # Ensure we don't go out of bounds
+                delta = sim_dates[i+1] - sim_dates[i]
+                years = delta.days / 365.0
+                durations.append(years)
         
-        phase_durations.append(durations)
+        # Ensure we have exactly 3 durations (SC to SAR, SAR to SIAR, SIAR to ASI)
+        # Pad with NaN if we have fewer milestones due to capping
+        while len(durations) < 3:
+            durations.append(float('nan'))
+        
+        # Take only the first 3 durations to match our phase names
+        phase_durations.append(durations[:3])
     
     # Transpose to get list of durations for each phase
     phase_durations = list(map(list, zip(*phase_durations)))
+    
+    # Filter out NaN values for each phase
+    filtered_phase_durations = []
+    for phase in phase_durations:
+        filtered_phase = [d for d in phase if not np.isnan(d)]
+        filtered_phase_durations.append(filtered_phase)
     
     # Set up figure with space for statistics on the right
     fig = plt.figure(figsize=(12, 6), facecolor=bg_rgb)
@@ -555,8 +572,8 @@ def create_phase_duration_plot(all_milestone_dates: list[list[datetime]], config
     # Create box plot with log scale
     ax_box.set_yscale('log')
     
-    # Create box plot with custom whiskers at 90th percentile
-    bp = ax_box.boxplot(phase_durations, labels=phase_names, patch_artist=True, 
+    # Create box plot with custom whiskers at 90th percentile - fix the deprecation warning
+    bp = ax_box.boxplot(filtered_phase_durations, tick_labels=phase_names, patch_artist=True, 
                         whis=(10, 90))  # Set whiskers at 10th and 90th percentiles
     
     # Add color to boxes
@@ -582,20 +599,24 @@ def create_phase_duration_plot(all_milestone_dates: list[list[datetime]], config
     # Create statistics table in the right subplot
     ax_stats.axis('off')  # Hide axes for the stats panel
     
-    # Prepare statistics text using full data
+    # Prepare statistics text using filtered data
     stats_text = "Statistics (years):\n\n"
-    for i, data in enumerate(zip(phase_durations)):
-        p10 = np.percentile(data, 10)
-        p50 = np.percentile(data, 50)  # median
-        p90 = np.percentile(data, 90)
-        
-        stats_text += f"{phase_full[i]} to \n {phase_full[i+1]}\n"
-        stats_text += f"  10th: {p10:.2f}\n"
-        stats_text += f"  50th: {p50:.2f}\n"
-        if (p90 > 100): 
-            stats_text += f"  90th: >100\n\n"
-        else: 
-            stats_text += f"  90th: {p90:.2f}\n\n"
+    for i, data in enumerate(filtered_phase_durations):
+        if len(data) > 0:
+            p10 = np.percentile(data, 10)
+            p50 = np.percentile(data, 50)  # median
+            p90 = np.percentile(data, 90)
+            
+            stats_text += f"{phase_full[i]} to \n {phase_full[i+1]}\n"
+            stats_text += f"  10th: {p10:.2f}\n"
+            stats_text += f"  50th: {p50:.2f}\n"
+            if (p90 > 100): 
+                stats_text += f"  90th: >100\n\n"
+            else: 
+                stats_text += f"  90th: {p90:.2f}\n\n"
+        else:
+            stats_text += f"{phase_full[i]} to \n {phase_full[i+1]}\n"
+            stats_text += f"  No valid data\n\n"
     
     # Add statistics text to the right panel
     ax_stats.text(0.06, 0.95, stats_text, 
@@ -738,8 +759,12 @@ def create_multi_project_timeline_plot(all_first_milestone_dates: list[list[date
                     x_range = np.linspace(start_year, MAX_GRAPH_YEAR, 1000)
                     density = kde(x_range)
                     
-                    # Normalize density
-                    density = density / np.sum(density) * (len(visible_data) / len(project_sar_times))
+                    # Normalize density - fix division by zero
+                    density_sum = np.sum(density)
+                    if density_sum > 0:
+                        density = density / density_sum * (len(visible_data) / len(project_sar_times))
+                    else:
+                        density = np.zeros_like(density)  # Fallback if density is all zeros
                     
                     # Plot distribution
                     project_params = config["projects"][project_name]
@@ -922,6 +947,8 @@ def create_project_delay_plot(all_project_results: list[dict], config: dict, plo
     
     # Plot delay distributions for each project
     stats_text = ""
+    has_plotted_data = False
+    
     for proj_idx, project_name in enumerate(projects_for_delay):
         delays = project_delays[project_name]
         
@@ -931,101 +958,104 @@ def create_project_delay_plot(all_project_results: list[dict], config: dict, plo
             p50 = np.percentile(delays, 50)
             p90 = np.percentile(delays, 90)
             
-            # Determine appropriate x-axis range based on the data
-            max_delay_in_data = max(delays)
-            # For small delays, ensure minimum visible range of 2 years
-            MAX_DELAY = max(2.0, min(max(5, max_delay_in_data * 1.2), 20))  # Ensure at least 2 years range
+            # Check if this project has meaningful delay variation
+            delay_variation = p90 - p10
             
-            # Filter data to reasonable range for visualization (include all data since delays are small)
-            visible_data = delays  # Don't filter small delays out
+            # Get project parameters for labeling
+            project_params = config["projects"][project_name]
+            if isinstance(project_params, dict) and "lower_bound" in project_params:
+                # New format - show median of range
+                median_rate = (project_params["lower_bound"] + project_params["upper_bound"]) / 2
+                rate_label = f"~{median_rate:.1f}x"
+            else:
+                # Old format - show fixed rate
+                progress_rate = project_params if isinstance(project_params, (int, float)) else 1.0
+                rate_label = f"{progress_rate:.1f}x"
             
-            if visible_data and len(visible_data) > 1:
-                # Calculate KDE on visible data using same approach as multi-project plot
-                try:
-                    # Special case: if most delays are 0, add small jitter for visualization
-                    if len([d for d in visible_data if d == 0]) > len(visible_data) * 0.5:
-                        # Add tiny random jitter to zero values for visualization
-                        jittered_data = []
-                        for d in visible_data:
-                            if d == 0:
-                                jittered_data.append(d + np.random.normal(0, 0.01))  # Small jitter
-                            else:
-                                jittered_data.append(d)
-                        kde = gaussian_kde(jittered_data)
-                    else:
-                        kde = gaussian_kde(visible_data)
-                    
-                    # Create x range for plotting (same resolution as multi-project plot)
-                    x_range = np.linspace(0, MAX_DELAY, 1000)
-                    density = kde(x_range)
-                    
-                    # Normalize density (same approach as multi-project plot)
-                    density = density / np.sum(density) * (len(visible_data) / len(delays))
-                    
-                    # Plot distribution
-                    project_params = config["projects"][project_name]
-                    if isinstance(project_params, dict) and "lower_bound" in project_params:
-                        # New format - show median of range
-                        median_rate = (project_params["lower_bound"] + project_params["upper_bound"]) / 2
-                        rate_label = f"~{median_rate:.1f}x"
-                    else:
-                        # Old format - show fixed rate
-                        progress_rate = project_params if isinstance(project_params, (int, float)) else 1.0
-                        rate_label = f"{progress_rate:.1f}x"
-                    
-                    ax.plot(x_range, density, '-', color=project_colors[proj_idx], 
-                           label=f"{project_name} ({rate_label})", linewidth=2, alpha=0.8)
-                    ax.fill_between(x_range, density, color=project_colors[proj_idx], alpha=0.2)
-                    
-                except (np.linalg.LinAlgError, ValueError):
-                    # KDE failed, use histogram instead
-                    project_params = config["projects"][project_name]
-                    if isinstance(project_params, dict) and "lower_bound" in project_params:
-                        # New format - show median of range
-                        median_rate = (project_params["lower_bound"] + project_params["upper_bound"]) / 2
-                        rate_label = f"~{median_rate:.1f}x"
-                    else:
-                        # Old format - show fixed rate
-                        progress_rate = project_params if isinstance(project_params, (int, float)) else 1.0
-                        rate_label = f"{progress_rate:.1f}x"
-                    
-                    # Create histogram
-                    bins = np.linspace(0, MAX_DELAY, 50)
-                    hist, bin_edges = np.histogram(visible_data, bins=bins, density=True)
-                    bin_centers = (bin_edges[:-1] + bin_edges[1:]) / 2
-                    
-                    # Plot as step function
-                    ax.step(bin_centers, hist, where='mid', color=project_colors[proj_idx], 
-                           label=f"{project_name} ({rate_label})", linewidth=2, alpha=0.8)
-                    ax.fill_between(bin_centers, hist, step='mid', color=project_colors[proj_idx], alpha=0.2)
+            # Special handling for projects that always (or almost always) win (very small delays)
+            if delay_variation < 0.1:  # Less than 0.1 years variation
+                # Add a vertical line at the median delay position instead of a distribution
+                ax.axvline(x=p50, color=project_colors[proj_idx], linestyle='--', linewidth=2, 
+                          alpha=0.8, label=f"{project_name} ({rate_label}) - Always wins")
                 
                 # Add to stats text
-                if p90 > MAX_DELAY:
-                    stats = (
-                        f"{project_name} ({rate_label}):\n"
-                        f"  10th: {p10:.2f} yrs\n"
-                        f"  50th: {p50:.2f} yrs\n"
-                        f"  90th: >{MAX_DELAY:.0f} yrs"
-                    )
+                if p50 < 0.01:
+                    stats = f"{project_name} ({rate_label}):\n  Always wins (0.00 yrs)"
                 else:
-                    stats = (
-                        f"{project_name} ({rate_label}):\n"
-                        f"  10th: {p10:.2f} yrs\n"
-                        f"  50th: {p50:.2f} yrs\n"
-                        f"  90th: {p90:.2f} yrs"
-                    )
+                    stats = f"{project_name} ({rate_label}):\n  Consistent: {p50:.2f} yrs"
+            else:
+                # Plot normal distribution for projects with meaningful delay variation
+                # Determine appropriate x-axis range based on the data
+                max_delay_in_data = max(delays)
+                # For small delays, ensure minimum visible range of 2 years
+                MAX_DELAY = max(2.0, min(max(5, max_delay_in_data * 1.2), 20))  # Ensure at least 2 years range
                 
-                if proj_idx == 0:
-                    stats_text = stats
-                else:
-                    stats_text += f"\n\n{stats}"
+                # Filter data to reasonable range for visualization (include all data since delays are small)
+                visible_data = delays  # Don't filter small delays out
+                
+                if visible_data and len(visible_data) > 1:
+                    # Calculate KDE on visible data using same approach as multi-project plot
+                    try:
+                        # For projects with some variation, use standard KDE
+                        kde = gaussian_kde(visible_data)
+                        
+                        # Create x range for plotting (same resolution as multi-project plot)
+                        x_range = np.linspace(0, MAX_DELAY, 1000)
+                        density = kde(x_range)
+                        
+                        # Normalize density (same approach as multi-project plot) - fix division by zero
+                        density_sum = np.sum(density)
+                        if density_sum > 0:
+                            density = density / density_sum * (len(visible_data) / len(delays))
+                        else:
+                            density = np.zeros_like(density)  # Fallback if density is all zeros
+                        
+                        # Plot distribution
+                        ax.plot(x_range, density, '-', color=project_colors[proj_idx], 
+                               label=f"{project_name} ({rate_label})", linewidth=2, alpha=0.8)
+                        ax.fill_between(x_range, density, color=project_colors[proj_idx], alpha=0.2)
+                        has_plotted_data = True
+                        
+                    except (np.linalg.LinAlgError, ValueError):
+                        # KDE failed, use histogram instead
+                        # Create histogram
+                        bins = np.linspace(min(visible_data), max(visible_data), 20)
+                        hist, bin_edges = np.histogram(visible_data, bins=bins, density=True)
+                        bin_centers = (bin_edges[:-1] + bin_edges[1:]) / 2
+                        
+                        # Plot as step function
+                        ax.step(bin_centers, hist, where='mid', color=project_colors[proj_idx], 
+                               label=f"{project_name} ({rate_label})", linewidth=2, alpha=0.8)
+                        ax.fill_between(bin_centers, hist, step='mid', color=project_colors[proj_idx], alpha=0.2)
+                    
+                    # Add to stats text
+                    if p90 > 20:  # Adjust threshold based on reasonable delays
+                        stats = (
+                            f"{project_name} ({rate_label}):\n"
+                            f"  10th: {p10:.2f} yrs\n"
+                            f"  50th: {p50:.2f} yrs\n"
+                            f"  90th: >20 yrs"
+                        )
+                    else:
+                        stats = (
+                            f"{project_name} ({rate_label}):\n"
+                            f"  10th: {p10:.2f} yrs\n"
+                            f"  50th: {p50:.2f} yrs\n"
+                            f"  90th: {p90:.2f} yrs"
+                        )
+                
+            # Add to stats text
+            if proj_idx == 0:
+                stats_text = stats
+            else:
+                stats_text += f"\n\n{stats}"
     
-    # Determine final x-axis limit based on actual data
-    all_delays = [delay for delays in project_delays.values() for delay in delays]
-    if all_delays:
-        data_max = np.percentile(all_delays, 95)  # Use 95th percentile to avoid outliers
-        # For small delays, ensure minimum visible range of 2 years
-        final_xlim = max(2.0, min(max(3, data_max * 1.3), 15))  # Reasonable range with minimum
+    # Determine final x-axis limit based on actual data, excluding always-zero delays
+    non_zero_delays = [delay for delays in project_delays.values() for delay in delays if delay > 0.01]
+    if non_zero_delays:
+        data_max = np.percentile(non_zero_delays, 95)  # Use 95th percentile to avoid outliers
+        # For small delays, ensure minimum visible range of 2 years, but focus on actual variation
+        final_xlim = max(2.0, min(data_max * 1.3, 15))  # Reasonable range
     else:
         final_xlim = 5
     
