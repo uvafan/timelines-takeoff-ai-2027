@@ -900,6 +900,10 @@ def create_project_delay_plot(all_project_results: list[dict], config: dict, plo
     # Calculate delays for each simulation
     project_delays = {project: [] for project in projects_for_delay}
     
+    # Track which project wins each simulation to determine actual winners
+    project_wins = {project: 0 for project in projects_for_delay}
+    total_valid_sims = 0
+    
     for sim_idx, sim_results in enumerate(all_project_results):
         # Find the earliest SAR date across all projects in this simulation
         earliest_sar_date = None
@@ -913,8 +917,14 @@ def create_project_delay_plot(all_project_results: list[dict], config: dict, plo
                     if earliest_sar_date is None or sar_date < earliest_sar_date:
                         earliest_sar_date = sar_date
         
-        # Calculate delays relative to earliest
+        # Calculate delays relative to earliest and track winner
         if earliest_sar_date is not None:
+            total_valid_sims += 1
+            # Find the winner(s) for this simulation
+            winners = [name for name, date in valid_projects.items() if date == earliest_sar_date]
+            for winner in winners:
+                project_wins[winner] += 1 / len(winners)  # Split wins if there's a tie
+            
             for project_name in projects_for_delay:
                 if project_name in valid_projects:
                     delay_days = (valid_projects[project_name] - earliest_sar_date).days
@@ -990,92 +1000,97 @@ def create_project_delay_plot(all_project_results: list[dict], config: dict, plo
                 progress_rate = project_params if isinstance(project_params, (int, float)) else 1.0
                 rate_label = f"{progress_rate:.1f}x"
             
-            # Special handling for projects that always (or almost always) win (very small delays)
-            if delay_variation < 0.1:  # Less than 0.1 years variation
+            # Check if this project actually wins most/all simulations
+            win_rate = project_wins[project_name] / total_valid_sims if total_valid_sims > 0 else 0
+            
+            # For plotting distributions, filter out zero delays (wins) to avoid visualization issues
+            non_zero_delays = [d for d in delays if d > 0.01]  # Remove essentially zero delays
+            
+            # Special handling for projects that win almost all simulations (>95%) or have no non-zero delays
+            if win_rate > 0.95 or len(non_zero_delays) < 5:
                 # Add a vertical line at the median delay position instead of a distribution
                 ax.axvline(x=p50, color=project_colors[proj_idx], linestyle='--', linewidth=2, 
-                          alpha=0.8, label=f"{project_name} ({rate_label}) - Always wins")
+                          alpha=0.8, label=f"{project_name} ({rate_label}) - Wins {win_rate:.0%}")
                 
                 # Add to stats text
                 if p50 < 0.01:
-                    stats = f"{project_name} ({rate_label}):\n  Always wins (0.00 yrs)"
+                    stats = f"{project_name} ({rate_label}):\n  Wins {win_rate:.0%} (0.00 yrs)"
                 else:
-                    stats = f"{project_name} ({rate_label}):\n  Consistent: {p50:.2f} yrs"
+                    stats = f"{project_name} ({rate_label}):\n  Wins {win_rate:.0%}: {p50:.2f} yrs"
             else:
-                # Plot normal distribution for projects with meaningful delay variation
-                # Determine appropriate x-axis range based on the data
-                max_delay_in_data = max(delays)
-                # For small delays, ensure minimum visible range of 2 years
-                MAX_DELAY = max(2.0, min(max(5, max_delay_in_data * 1.2), 20))  # Ensure at least 2 years range
+                # Plot normal distribution for projects with meaningful delay variation or don't always win
+                # Use non-zero delays for better visualization
+                visible_data = non_zero_delays
                 
-                # Filter data to reasonable range for visualization (include all data since delays are small)
-                visible_data = delays  # Don't filter small delays out
-                
-                if visible_data and len(visible_data) > 10:  # Need enough data for KDE
-                    # Calculate KDE on visible data using same approach as multi-project plot
+                if visible_data and len(visible_data) > 5:  # Need enough non-zero data for meaningful distribution
+                    # Calculate percentiles based on non-zero delays for better stats
+                    nz_p10 = np.percentile(visible_data, 10)
+                    nz_p50 = np.percentile(visible_data, 50)
+                    nz_p90 = np.percentile(visible_data, 90)
+                    
+                    # Determine appropriate x-axis range based on the non-zero data
+                    max_delay_in_data = max(visible_data)
+                    # Ensure reasonable range
+                    MAX_DELAY = max(2.0, min(max(5, max_delay_in_data * 1.2), 20))
+                    
+                    # Calculate KDE on non-zero data
                     try:
-                        # Special case: if most delays are 0, add small jitter for visualization
-                        if len([d for d in visible_data if d == 0]) > len(visible_data) * 0.5:
-                            # Add tiny random jitter to zero values for visualization
-                            jittered_data = []
-                            for d in visible_data:
-                                if d == 0:
-                                    jittered_data.append(d + np.random.normal(0, 0.01))  # Small jitter
-                                else:
-                                    jittered_data.append(d)
-                            # Check if we have enough distinct values after jittering
-                            if len(set(jittered_data)) > 1:
-                                kde = gaussian_kde(jittered_data)
-                            else:
-                                raise ValueError("Insufficient data variation for KDE")
-                        else:
-                            kde = gaussian_kde(visible_data)
+                        kde = gaussian_kde(visible_data)
                         
-                        # Create x range for plotting
-                        x_range = np.linspace(0, MAX_DELAY, 1000)
+                        # Create x range for plotting (start from small positive value, not 0)
+                        x_range = np.linspace(0.01, MAX_DELAY, 1000)
                         density = kde(x_range)
                         
-                        # Normalize density - fix division by zero
+                        # Normalize density
                         density_sum = np.sum(density)
                         if density_sum > 0:
                             density = density / density_sum * (len(visible_data) / len(delays))
                         else:
-                            density = np.zeros_like(density)  # Fallback if density is all zeros
+                            density = np.zeros_like(density)
                         
                         # Plot distribution
                         ax.plot(x_range, density, '-', color=project_colors[proj_idx], 
-                               label=f"{project_name} ({rate_label})", linewidth=2, alpha=0.8)
+                               label=f"{project_name} ({rate_label}) - Wins {win_rate:.0%}", linewidth=2, alpha=0.8)
                         ax.fill_between(x_range, density, color=project_colors[proj_idx], alpha=0.2)
                         has_plotted_data = True
                         
                     except (np.linalg.LinAlgError, ValueError):
                         # KDE failed, use histogram instead
-                        # Create histogram
-                        bins = np.linspace(min(visible_data), max(visible_data), 20)
+                        bins = np.linspace(min(visible_data), max(visible_data), 15)
                         hist, bin_edges = np.histogram(visible_data, bins=bins, density=True)
                         bin_centers = (bin_edges[:-1] + bin_edges[1:]) / 2
                         
                         # Plot as step function
                         ax.step(bin_centers, hist, where='mid', color=project_colors[proj_idx], 
-                               label=f"{project_name} ({rate_label})", linewidth=2, alpha=0.8)
+                               label=f"{project_name} ({rate_label}) - Wins {win_rate:.0%}", linewidth=2, alpha=0.8)
                         ax.fill_between(bin_centers, hist, step='mid', color=project_colors[proj_idx], alpha=0.2)
                     
-                    # Add to stats text
-                    if p90 > 20:  # Adjust threshold based on reasonable delays
+                    # Add to stats text (use non-zero delay percentiles for better insight)
+                    if nz_p90 > 20:
                         stats = (
                             f"{project_name} ({rate_label}):\n"
-                            f"  10th: {p10:.2f} yrs\n"
-                            f"  50th: {p50:.2f} yrs\n"
-                            f"  90th: >20 yrs"
+                            f"  Wins {win_rate:.0%}\n"
+                            f"  When behind:\n"
+                            f"    10th: {nz_p10:.2f} yrs\n"
+                            f"    50th: {nz_p50:.2f} yrs\n"
+                            f"    90th: >20 yrs"
                         )
                     else:
                         stats = (
                             f"{project_name} ({rate_label}):\n"
-                            f"  10th: {p10:.2f} yrs\n"
-                            f"  50th: {p50:.2f} yrs\n"
-                            f"  90th: {p90:.2f} yrs"
+                            f"  Wins {win_rate:.0%}\n"
+                            f"  When behind:\n"
+                            f"    10th: {nz_p10:.2f} yrs\n"
+                            f"    50th: {nz_p50:.2f} yrs\n"
+                            f"    90th: {nz_p90:.2f} yrs"
                         )
-                
+                else:
+                    # Not enough non-zero data, fall back to vertical line
+                    ax.axvline(x=p50, color=project_colors[proj_idx], linestyle='--', linewidth=2, 
+                              alpha=0.8, label=f"{project_name} ({rate_label}) - Wins {win_rate:.0%}")
+                    
+                    stats = f"{project_name} ({rate_label}):\n  Wins {win_rate:.0%}"
+        
             # Add to stats text
             if proj_idx == 0:
                 stats_text = stats
