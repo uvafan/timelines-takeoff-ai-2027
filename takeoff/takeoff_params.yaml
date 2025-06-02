@@ -11,7 +11,7 @@ times:
 
 # Speed multipliers at each milestone
 speedups:
-  PRESENT_DAY: 1.02
+  PRESENT_DAY: 1.07
   SC: 5
   SAR: 25
   SIAR: 250
