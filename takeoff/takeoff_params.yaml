@@ -6,7 +6,7 @@ simulation:
   dt: 1  # days
 
 # These are based on the timelines simulation, should change if that changes.
-# In particular, see research_trajectory_data.json (divide by 9 then subtract 5.5 from the median research stock at SC)
+# In particular, see research_trajectory_data.json (divide by 9 to get the median research stock at SC)
 present_day_to_sc_info:
   research_stock_at_present_day: 5.5
   software_research_stock_at_sc: 12
@@ -35,27 +35,27 @@ speedups:
 # initial_software_months_behind: How many months behind the leading lab the project's software efficiency starts.
 # initial_hardware_multiple: The percentage of compute of the leading lab that the projects starts with.
 # software_progress_rate: The progress rate of the project's software efficiency relative to the leading lab's if it were going full speed.
-# Limiation: For now we intutively guesstimate how hardware affects the software progress rate rather than doing this programatically. The hardware multiple and software progress rate are correlated in the simuation.
+# Limitation: For now we intutively guesstimate how hardware affects the software progress rate rather than doing this programatically. The hardware multiple and software progress rate are correlated in the simuation.
 # Limitation: We also assume that the software progress rate doesn't change over time, which likely isn't true e.g. the dynamics change as AI R&D gets more automated.
 # Format: [p_zero, lower_bound, upper_bound, ceiling] for 80% confidence interval of lognormal distribution
 projects:
-  "Leading Project":
+  "Leading Project (if full speed)":
     initial_software_months_behind: [1, 0, 0, 0]
     initial_hardware_multiple: [0, 1, 1, 1]
     software_progress_rate: [0, 1, 1, 1]
   "20x less hardware, uncertainty about rest": 
     initial_software_months_behind: [0, 1, 18, 24]
     initial_hardware_multiple: [0, 0.2, 0.2, 0.2]
-    software_progress_rate: [0, 0.04, 0.5, 1]
+    software_progress_rate: [0, 0.01, 0.35, 1]
   "100x less hardware, uncertainty about rest": 
     initial_software_months_behind: [0, 1, 18, 24]
     initial_hardware_multiple: [0, 0.01, 0.01, 0.01]
-    software_progress_rate: [0, 0.04, 0.5, 1]
-  # "Russia": 
+    software_progress_rate: [0, 0.0025, 0.15, 1]
+  # "Russia (not closely considered)": 
   #   initial_software_months_behind: [0, 1, 18, 24]
   #   initial_hardware_multiple: [0, 0.005, 0.2, 0.4]
   #   software_progress_rate: [0, 0.04, 0.5, 1]
-  # "Open Source Collective":
+  # "Open Source Collective (not closely considered)":
   #   initial_software_months_behind: [0, 1, 18, 24]
   #   initial_hardware_multiple: [0, 0.002, 0.05, 0.4]
   #   software_progress_rate: [0, 0.02, 0.3, 1]

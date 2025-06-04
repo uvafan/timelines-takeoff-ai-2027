@@ -10,7 +10,7 @@ Then, cd into the `timelines` folder and run `poetry run python forecasting_time
 
 Do the same thing but in the `timelines_may_2025_update` folder to run the May 2025 version of the timelines model.
 
-To run the takeoff simulation, input your parameters in `takeoff/params.yaml`, cd into `takeoff` then run `forecasting_takeoff.py`.
+To run the takeoff simulation, input your parameters in `takeoff/takeoff_params.yaml`, cd into `takeoff` then run `forecasting_takeoff.py`.
 
 Note that all time amounts in the timelines simulation are in "work time", i.e. the amount of time that a human would work during that time period: for example, a work week is 40 hours and a work year is 2,000 hours.
 
