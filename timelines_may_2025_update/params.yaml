@@ -1,6 +1,6 @@
 # Shared simulation parameters
 simulation:
-  n_sims: 500     # Number of Monte Carlo simulation runs
+  n_sims: 5000     # Number of Monte Carlo simulation runs
   n_steps: 30000   # Maximum simulation steps before timeout
   t_start: 2025.25  # Starting time for simulation, when the initial forecast was published
   dt: 1.0          # Time step size in days

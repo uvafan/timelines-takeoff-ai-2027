@@ -293,8 +293,8 @@ def get_labor_growth_rate(t: float, labor_growth_schedule: list) -> float:
             
     return current_rate
 
-def run_single_scenario(samples: dict, params: dict, forecaster_config: dict, simulation_config: dict) -> tuple[list[float], list[list[float]], list[list[float]]]:
-    """Run simulation for a single scenario configuration."""
+def run_single_forecaster_simulation(samples: dict, params: dict, forecaster_config: dict, simulation_config: dict) -> tuple[list[float], list[list[float]], list[list[float]]]:
+    """Run simulation for a single forecaster configuration."""
     successful_times = []
     research_trajectories = []  # Store research stock over time for each simulation
     time_trajectories = []      # Store corresponding time points
@@ -1114,7 +1114,8 @@ def create_research_trajectory_plot(all_forecaster_trajectories: dict, config: d
 
 def simulate_pre_saturation_period(samples: dict, simulation_idx: int, params: dict, 
                                    forecaster_config: dict, simulation_config: dict) -> tuple[float, float, list[float], list[float]]:
-    """Simulate the pre-saturation period with time-based exponential interpolation.
+    """Simulate the pre-saturation period with time-based exponential interpolation between progress multipliers at present day and saturation.
+        This is a simplification but doesn't affect the results much because the multipliers are low.
     
     Returns:
         tuple: (final_research_stock, final_labor_pool, research_trajectory, time_trajectory)
@@ -1236,7 +1237,7 @@ def run_and_plot_sc_scenarios(config_path: str = "params.yaml") -> tuple[plt.Fig
         all_forecaster_samples[name] = samples
         
         # Run simulation
-        results, research_trajectories, time_trajectories = run_single_scenario(samples, sim_params, forecaster_config, config["simulation"])
+        results, research_trajectories, time_trajectories = run_single_forecaster_simulation(samples, sim_params, forecaster_config, config["simulation"])
         all_forecaster_headline_results[name] = results
         all_forecaster_trajectories[name] = (results, research_trajectories, time_trajectories)
     
