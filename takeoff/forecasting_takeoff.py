@@ -670,6 +670,7 @@ def run_multi_project_takeoff_simulation(config_path: str = "takeoff_params.yaml
     fig_multi_timeline = create_multi_project_timeline_plot(all_first_milestone_dates, all_project_results, config, plotting_style, fonts)
     fig_project_delays = create_project_delay_plot(all_project_results, config, plotting_style, fonts, project_progress_samples)
     fig_sc_timeline = create_project_sc_timeline_plot(all_project_results, config, plotting_style, fonts)
+    fig_sar_timeline = create_project_sar_timeline_plot(all_project_results, config, plotting_style, fonts)
     
     # Also create single-project plots for the fastest project (for comparison)
     fastest_project = min(project_progress_samples.keys(), key=lambda x: 1/np.mean(project_progress_samples[x]))  # Highest mean progress rate
@@ -685,6 +686,7 @@ def run_multi_project_takeoff_simulation(config_path: str = "takeoff_params.yaml
     fig_multi_timeline.savefig(output_dir / "multi_project_takeoff_timeline.png", dpi=300, bbox_inches="tight")
     fig_project_delays.savefig(output_dir / "project_sar_delays.png", dpi=300, bbox_inches="tight")
     fig_sc_timeline.savefig(output_dir / "project_sc_timeline.png", dpi=300, bbox_inches="tight")
+    fig_sar_timeline.savefig(output_dir / "project_sar_timeline.png", dpi=300, bbox_inches="tight")
     fig_fastest_timeline.savefig(output_dir / f"fastest_project_{fastest_project.replace(' ', '_')}_timeline.png", dpi=300, bbox_inches="tight")
     fig_fastest_phases.savefig(output_dir / f"fastest_project_{fastest_project.replace(' ', '_')}_phases.png", dpi=300, bbox_inches="tight")
     
@@ -1514,6 +1516,7 @@ def run_takeoff_simulation(config_path: str = "takeoff_params.yaml") -> tuple[pl
     fig_multi_timeline = create_multi_project_timeline_plot(all_first_milestone_dates, all_project_results, config, plotting_style, fonts)
     fig_project_delays = create_project_delay_plot(all_project_results, config, plotting_style, fonts, project_progress_samples)
     fig_sc_timeline = create_project_sc_timeline_plot(all_project_results, config, plotting_style, fonts)
+    fig_sar_timeline = create_project_sar_timeline_plot(all_project_results, config, plotting_style, fonts)
     
     # Also create single-project plots for the fastest project (for comparison)
     fastest_project = min(project_progress_samples.keys(), key=lambda x: 1/np.mean(project_progress_samples[x]))  # Highest mean progress rate
@@ -1529,6 +1532,7 @@ def run_takeoff_simulation(config_path: str = "takeoff_params.yaml") -> tuple[pl
     fig_multi_timeline.savefig(output_dir / "multi_project_takeoff_timeline.png", dpi=300, bbox_inches="tight")
     fig_project_delays.savefig(output_dir / "project_sar_delays.png", dpi=300, bbox_inches="tight")
     fig_sc_timeline.savefig(output_dir / "project_sc_timeline.png", dpi=300, bbox_inches="tight")
+    fig_sar_timeline.savefig(output_dir / "project_sar_timeline.png", dpi=300, bbox_inches="tight")
     fig_fastest_timeline.savefig(output_dir / f"fastest_project_{fastest_project.replace(' ', '_')}_timeline.png", dpi=300, bbox_inches="tight")
     fig_fastest_phases.savefig(output_dir / f"fastest_project_{fastest_project.replace(' ', '_')}_phases.png", dpi=300, bbox_inches="tight")
     
@@ -1729,6 +1733,155 @@ def create_project_sc_timeline_plot(all_project_results: list[dict], config: dic
     ax.set_xlabel("Year", fontsize=plotting_style["font"]["sizes"]["axis_labels"])
     ax.set_ylabel("Probability Density", fontsize=plotting_style["font"]["sizes"]["axis_labels"])
     ax.set_title("Multi-Project Comparison: Superhuman Coder Achievement", 
+                 fontsize=plotting_style["font"]["sizes"]["title"], pad=10)
+    
+    # Add grid and styling
+    ax.grid(True, alpha=0.2, zorder=0)
+    ax.set_axisbelow(True)
+    ax.spines['top'].set_visible(False)
+    ax.spines['right'].set_visible(False)
+    
+    # Add legend
+    legend = ax.legend(loc='upper left', fontsize=plotting_style["font"]["sizes"]["legend"])
+    for text in legend.get_texts():
+        text.set_fontproperties(fonts['regular_legend'])
+    
+    # Configure ticks
+    ax.tick_params(axis="both", labelsize=plotting_style["font"]["sizes"]["ticks"])
+
+    return fig
+
+def create_project_sar_timeline_plot(all_project_results: list[dict], config: dict, plotting_style: dict, fonts: dict) -> plt.Figure:
+    """Create timeline plot showing SAR achievement distributions for multiple projects.
+    
+    Args:
+        all_project_results: List of project results for each simulation
+        config: Configuration dictionary
+        plotting_style: Plotting style configuration
+        fonts: Font configuration
+    """
+    # Get background color
+    background_color = "#FFFEF8"
+    bg_rgb = tuple(int(background_color.lstrip('#')[i:i+2], 16)/255 for i in (0, 2, 4))
+    
+    fig = plt.figure(figsize=(12, 6), dpi=150, facecolor=bg_rgb)
+    ax = fig.add_subplot(111)
+    ax.set_facecolor(bg_rgb)
+    
+    # Project comparison - show SAR distributions for each project
+    projects = list(config["projects"].keys())
+    project_colors = plt.cm.Set3(np.linspace(0, 1, len(projects)))
+    
+    # Extend the graph range to show full distributions
+    MAX_GRAPH_YEAR = 2050  # Extended to show more of the distributions
+    start_year = float(config["starting_time"].split()[-1])
+    
+    # Plot SAR distributions for each project
+    stats_text = ""
+    for proj_idx, project_name in enumerate(projects):
+        project_sar_times = []
+        for sim_results in all_project_results:
+            if project_name in sim_results and len(sim_results[project_name]) > 1:
+                sar_date = sim_results[project_name][1]  # SAR is at index 1
+                if sar_date.year < 9999:  # Filter out capped values
+                    project_sar_times.append(sar_date.year + sar_date.timetuple().tm_yday/365)
+        
+        if project_sar_times and len(project_sar_times) > 5:  # Lower threshold
+            # Calculate percentiles for stats
+            p10 = np.percentile(project_sar_times, 10)
+            p50 = np.percentile(project_sar_times, 50)
+            p90 = np.percentile(project_sar_times, 90)
+            
+            # Convert decimal years to month and year format for display
+            def year_to_date(year):
+                year_int = int(year)
+                if year_int > 9999:
+                    return f"{year_int}"
+                month = int((year - year_int) * 12) + 1
+                month_name = datetime(year_int, month, 1).strftime('%b')
+                return f"{month_name} {year_int}"
+            
+            # Filter data to visible range - use most of the data
+            visible_data = [x for x in project_sar_times if x <= MAX_GRAPH_YEAR]
+            
+            if visible_data:
+                # Check if we need special handling for Leading Project (all same values)
+                unique_visible = len(set(visible_data))
+                
+                if unique_visible <= 1:
+                    # All values are the same - plot vertical line
+                    median_sar = visible_data[0]
+                    ax.axvline(x=median_sar, color=project_colors[proj_idx], linestyle='-', linewidth=3,
+                             alpha=0.8, label=f"{project_name}", zorder=2)
+                    
+                elif unique_visible < 5:
+                    # Too few unique values for KDE, use histogram
+                    data_min = min(visible_data)
+                    data_max = max(visible_data)
+                    if data_max > data_min:
+                        bins = np.linspace(data_min, data_max, max(3, unique_visible))
+                        hist, bin_edges = np.histogram(visible_data, bins=bins, density=True)
+                        bin_centers = (bin_edges[:-1] + bin_edges[1:]) / 2
+                        
+                        # Plot as step function
+                        ax.step(bin_centers, hist, where='mid', color=project_colors[proj_idx], 
+                               label=f"{project_name}", linewidth=2, alpha=0.8)
+                        ax.fill_between(bin_centers, hist, step='mid', color=project_colors[proj_idx], alpha=0.2)
+                    else:
+                        # All values identical, just show vertical line
+                        ax.axvline(x=data_min, color=project_colors[proj_idx], linestyle='-', linewidth=3,
+                                 alpha=0.8, label=f"{project_name}", zorder=2)
+                else:
+                    # Use KDE for smooth distribution
+                    try:
+                        kde = gaussian_kde(visible_data)
+                        x_range = np.linspace(min(visible_data), MAX_GRAPH_YEAR, 1000)
+                        density = kde(x_range)
+                        
+                        # Plot distribution
+                        ax.plot(x_range, density, '-', color=project_colors[proj_idx], 
+                               label=f"{project_name}", linewidth=2, alpha=0.8)
+                        ax.fill_between(x_range, density, color=project_colors[proj_idx], alpha=0.2)
+                        
+                    except (np.linalg.LinAlgError, ValueError):
+                        # KDE failed, fall back to histogram
+                        bins = min(15, max(5, unique_visible))
+                        hist, bin_edges = np.histogram(visible_data, bins=bins, density=True)
+                        bin_centers = (bin_edges[:-1] + bin_edges[1:]) / 2
+                        
+                        # Plot as step function  
+                        ax.step(bin_centers, hist, where='mid', color=project_colors[proj_idx], 
+                               label=f"{project_name}", linewidth=2, alpha=0.8)
+                        ax.fill_between(bin_centers, hist, step='mid', color=project_colors[proj_idx], alpha=0.2)
+                
+                # Add to stats text
+                stats = (
+                    f"{project_name}:\n"
+                    f"  10th: {year_to_date(p10)}\n"
+                    f"  50th: {year_to_date(p50)}\n"
+                    f"  90th: {year_to_date(p90)}"
+                )
+                
+                if proj_idx == 0:
+                    stats_text = stats
+                else:
+                    stats_text += f"\n\n{stats}"
+    
+    # Add stats text
+    if stats_text:
+        text = ax.text(0.68, 1, stats_text,
+                transform=ax.transAxes,
+                verticalalignment='top',
+                horizontalalignment='left',
+                fontsize=plotting_style["font"]["sizes"]["small"])
+        text.set_fontproperties(fonts['regular_legend'])
+    
+    # Configure plot styling
+    ax.set_xlim(start_year, MAX_GRAPH_YEAR)
+    ax.set_ylim(0, None)
+    ax.set_xlabel("Year", fontsize=plotting_style["font"]["sizes"]["axis_labels"])
+    ax.set_ylabel("Probability Density", fontsize=plotting_style["font"]["sizes"]["axis_labels"])
+    ax.set_title("Project SAR Achievement Timeline", 
                  fontsize=plotting_style["font"]["sizes"]["title"], pad=10)
     
     # Add grid and styling

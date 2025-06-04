@@ -2,7 +2,7 @@ starting_time: "March 31 2027" # Maybe change depending on Plan A scenario timin
 
 # Simulation parameters
 simulation:
-  n_sims: 500 # Should be 5000 for full simulation
+  n_sims: 50 # Should be 5000 for full simulation
   dt: 1  # days
 
 # These are based on the timelines simulation, should change if that changes.
@@ -41,16 +41,24 @@ speedups:
 projects:
   "Leading Project":
     initial_software_months_behind: [1, 0, 0, 0]
-    initial_hardware_multiple: [0, 0.99, 1.01, 1.01]
-    software_progress_rate: [0, 0.99, 1.01, 1.01]
-  "Russia": 
+    initial_hardware_multiple: [0, 1, 1, 1]
+    software_progress_rate: [0, 1, 1, 1]
+  "20x less hardware, uncertainty about rest": 
     initial_software_months_behind: [0, 1, 18, 24]
-    initial_hardware_multiple: [0, 0.005, 0.2, 0.4]
+    initial_hardware_multiple: [0, 0.2, 0.2, 0.2]
     software_progress_rate: [0, 0.04, 0.5, 1]
-  "Open Source Collective":
+  "100x less hardware, uncertainty about rest": 
     initial_software_months_behind: [0, 1, 18, 24]
-    initial_hardware_multiple: [0, 0.002, 0.05, 0.4]
-    software_progress_rate: [0, 0.02, 0.3, 1]
+    initial_hardware_multiple: [0, 0.01, 0.01, 0.01]
+    software_progress_rate: [0, 0.04, 0.5, 1]
+  # "Russia": 
+  #   initial_software_months_behind: [0, 1, 18, 24]
+  #   initial_hardware_multiple: [0, 0.005, 0.2, 0.4]
+  #   software_progress_rate: [0, 0.04, 0.5, 1]
+  # "Open Source Collective":
+  #   initial_software_months_behind: [0, 1, 18, 24]
+  #   initial_hardware_multiple: [0, 0.002, 0.05, 0.4]
+  #   software_progress_rate: [0, 0.02, 0.3, 1]
 
 # Plotting style configuration
 plotting_style:
