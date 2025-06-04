@@ -1282,7 +1282,6 @@ def create_project_delay_plot(all_project_results: list[dict], config: dict, plo
     # Track which project wins each simulation to determine actual winners
     project_wins = {project: 0 for project in projects_for_delay}
     total_valid_sims = 0
-    delay_plot_ties = 0
     
     for sim_idx, sim_results in enumerate(all_project_results):
         # Find the earliest SAR date across all projects in this simulation
@@ -1302,9 +1301,6 @@ def create_project_delay_plot(all_project_results: list[dict], config: dict, plo
             total_valid_sims += 1
             # Find the winner(s) for this simulation
             winners = [name for name, date in valid_projects.items() if date == earliest_sar_date]
-            if len(winners) > 1:
-                delay_plot_ties += 1
-                print(f"  DELAY PLOT TIE in simulation {sim_idx}: {winners}")
             
             for winner in winners:
                 project_wins[winner] += 1 / len(winners)  # Split wins if there's a tie
@@ -1314,53 +1310,6 @@ def create_project_delay_plot(all_project_results: list[dict], config: dict, plo
                     delay_days = (valid_projects[project_name] - earliest_sar_date).days
                     delay_years = delay_days / 365.0
                     project_delays[project_name].append(delay_years)
-    
-    print(f"\nDelay plot analysis found {delay_plot_ties} ties")
-    print(f"Leading Project wins in delay plot: {project_wins.get('Leading Project', 0):.2f} out of {total_valid_sims}")
-    print(f"Leading Project win rate in delay plot: {project_wins.get('Leading Project', 0) / total_valid_sims * 100:.1f}%")
-    
-    # Debug: Print delay statistics
-    print(f"\nDelay Statistics:")
-    for project_name in projects_for_delay:
-        delays = project_delays[project_name]
-        if delays:
-            print(f"{project_name}: min={min(delays):.2f}, max={max(delays):.2f}, mean={np.mean(delays):.2f}, count={len(delays)}")
-        else:
-            print(f"{project_name}: No delay data")
-    
-    # Debug: Check a few example simulations to see what's happening
-    print(f"\nExample simulation details (first 3 simulations):")
-    for sim_idx in range(min(3, len(all_project_results))):
-        print(f"\nSimulation {sim_idx}:")
-        sim_results = all_project_results[sim_idx]
-        
-        # Get progress rates for this simulation if available
-        if project_progress_samples:
-            print("  Progress rates:")
-            for project_name in projects:
-                if project_name in project_progress_samples:
-                    rate = project_progress_samples[project_name][sim_idx]
-                    print(f"    {project_name}: {rate:.3f}x")
-        
-        # Get SAR achievement dates
-        print("  SAR achievement dates:")
-        sar_dates = {}
-        for project_name in projects:
-            if project_name in sim_results and len(sim_results[project_name]) > 1:
-                sar_date = sim_results[project_name][1]
-                sar_dates[project_name] = sar_date
-                sar_year = sar_date.year + sar_date.timetuple().tm_yday/365
-                print(f"    {project_name}: {sar_year:.2f}")
-        
-        # Show winner and delays
-        if sar_dates:
-            earliest_date = min(sar_dates.values())
-            winner = [name for name, date in sar_dates.items() if date == earliest_date][0]
-            print(f"  Winner: {winner}")
-            print("  Delays:")
-            for project_name, date in sar_dates.items():
-                delay_years = (date - earliest_date).days / 365.0
-                print(f"    {project_name}: {delay_years:.3f} years")
     
     # Plot delay distributions for each project
     stats_text = ""
@@ -1375,27 +1324,6 @@ def create_project_delay_plot(all_project_results: list[dict], config: dict, plo
             p50 = np.percentile(delays, 50)
             p90 = np.percentile(delays, 90)
             
-            # Check if this project has meaningful delay variation
-            delay_variation = p90 - p10
-            
-            # Get project parameters for labeling - fix the parameter access
-            project_params = config["projects"][project_name]
-            if project_progress_samples and project_name in project_progress_samples:
-                # Use actual median from samples
-                median_rate = np.median(project_progress_samples[project_name])
-                rate_label = f"~{median_rate:.1f}x"
-            elif isinstance(project_params, dict) and "software_progress_rate" in project_params:
-                # New format - get median from config parameter range
-                params = project_params["software_progress_rate"]
-                if len(params) >= 3:  # [p_zero, lower, upper, ceiling]
-                    median_rate = (params[1] + params[2]) / 2  # (lower + upper) / 2
-                    rate_label = f"~{median_rate:.1f}x"
-                else:
-                    rate_label = "unknown rate"
-            else:
-                # Fallback
-                rate_label = "1.0x"
-            
             # Check if this project actually wins most/all simulations
             win_rate = project_wins[project_name] / total_valid_sims if total_valid_sims > 0 else 0
             
@@ -1406,13 +1334,13 @@ def create_project_delay_plot(all_project_results: list[dict], config: dict, plo
             if win_rate > 0.95 or len(non_zero_delays) < 5:
                 # Add a vertical line at the median delay position instead of a distribution
                 ax.axvline(x=p50, color=project_colors[proj_idx], linestyle='--', linewidth=2, 
-                          alpha=0.8, label=f"{project_name} ({rate_label}) - Wins {win_rate:.0%}")
+                          alpha=0.8, label=f"{project_name} - Wins {win_rate:.0%}")
                 
                 # Add to stats text
                 if p50 < 0.01:
-                    stats = f"{project_name} ({rate_label}):\n  Wins {win_rate:.0%} (0.00 yrs)"
+                    stats = f"{project_name}:\n  Wins {win_rate:.0%} (0.00 yrs)"
                 else:
-                    stats = f"{project_name} ({rate_label}):\n  Wins {win_rate:.0%}: {p50:.2f} yrs"
+                    stats = f"{project_name}:\n  Wins {win_rate:.0%}: {p50:.2f} yrs"
             else:
                 # Plot normal distribution for projects with meaningful delay variation or don't always win
                 # Use non-zero delays for better visualization
@@ -1426,8 +1354,8 @@ def create_project_delay_plot(all_project_results: list[dict], config: dict, plo
                     
                     # Determine appropriate x-axis range based on the non-zero data
                     max_delay_in_data = max(visible_data)
-                    # Ensure reasonable range
-                    MAX_DELAY = max(2.0, min(max(5, max_delay_in_data * 1.2), 20))
+                    # Ensure reasonable range - extend to show more of the distribution
+                    MAX_DELAY = max(5.0, min(max(10, max_delay_in_data * 1.2), 30))
                     
                     # Calculate KDE on non-zero data
                     try:
@@ -1444,9 +1372,9 @@ def create_project_delay_plot(all_project_results: list[dict], config: dict, plo
                         else:
                             density = np.zeros_like(density)
                         
-                        # Plot distribution
+                        # Plot distribution without progress rate labels
                         ax.plot(x_range, density, '-', color=project_colors[proj_idx], 
-                               label=f"{project_name} ({rate_label}) - Wins {win_rate:.0%}", linewidth=2, alpha=0.8)
+                               label=f"{project_name} - Wins {win_rate:.0%}", linewidth=2, alpha=0.8)
                         ax.fill_between(x_range, density, color=project_colors[proj_idx], alpha=0.2)
                         has_plotted_data = True
                         
@@ -1458,22 +1386,22 @@ def create_project_delay_plot(all_project_results: list[dict], config: dict, plo
                         
                         # Plot as step function
                         ax.step(bin_centers, hist, where='mid', color=project_colors[proj_idx], 
-                               label=f"{project_name} ({rate_label}) - Wins {win_rate:.0%}", linewidth=2, alpha=0.8)
+                               label=f"{project_name} - Wins {win_rate:.0%}", linewidth=2, alpha=0.8)
                         ax.fill_between(bin_centers, hist, step='mid', color=project_colors[proj_idx], alpha=0.2)
                     
                     # Add to stats text (use non-zero delay percentiles for better insight)
-                    if nz_p90 > 20:
+                    if nz_p90 > 25:
                         stats = (
-                            f"{project_name} ({rate_label}):\n"
+                            f"{project_name}:\n"
                             f"  Wins {win_rate:.0%}\n"
                             f"  When behind:\n"
                             f"    10th: {nz_p10:.2f} yrs\n"
                             f"    50th: {nz_p50:.2f} yrs\n"
-                            f"    90th: >20 yrs"
+                            f"    90th: >25 yrs"
                         )
                     else:
                         stats = (
-                            f"{project_name} ({rate_label}):\n"
+                            f"{project_name}:\n"
                             f"  Wins {win_rate:.0%}\n"
                             f"  When behind:\n"
                             f"    10th: {nz_p10:.2f} yrs\n"
@@ -1483,9 +1411,9 @@ def create_project_delay_plot(all_project_results: list[dict], config: dict, plo
                 else:
                     # Not enough non-zero data, fall back to vertical line
                     ax.axvline(x=p50, color=project_colors[proj_idx], linestyle='--', linewidth=2, 
-                              alpha=0.8, label=f"{project_name} ({rate_label}) - Wins {win_rate:.0%}")
+                              alpha=0.8, label=f"{project_name} - Wins {win_rate:.0%}")
                     
-                    stats = f"{project_name} ({rate_label}):\n  Wins {win_rate:.0%}"
+                    stats = f"{project_name}:\n  Wins {win_rate:.0%}"
         
             # Add to stats text
             if proj_idx == 0:
@@ -1495,15 +1423,8 @@ def create_project_delay_plot(all_project_results: list[dict], config: dict, plo
         elif delays:  # Has some data but not enough for full analysis
             win_rate = project_wins[project_name] / total_valid_sims if total_valid_sims > 0 else 0
             
-            # Get rate label
-            if project_progress_samples and project_name in project_progress_samples:
-                median_rate = np.median(project_progress_samples[project_name])
-                rate_label = f"~{median_rate:.1f}x"
-            else:
-                rate_label = "1.0x"
-            
-            # Add basic stats
-            stats = f"{project_name} ({rate_label}):\n  Wins {win_rate:.0%}"
+            # Add basic stats without progress rate labels
+            stats = f"{project_name}:\n  Wins {win_rate:.0%}"
             if proj_idx == 0:
                 stats_text = stats
             else:
@@ -1519,10 +1440,10 @@ def create_project_delay_plot(all_project_results: list[dict], config: dict, plo
     non_zero_delays = [delay for delays in project_delays.values() for delay in delays if delay > 0.01]
     if non_zero_delays:
         data_max = np.percentile(non_zero_delays, 95)  # Use 95th percentile to avoid outliers
-        # For small delays, ensure minimum visible range of 2 years, but focus on actual variation
-        final_xlim = max(2.0, min(data_max * 1.3, 15))  # Reasonable range
+        # For small delays, ensure minimum visible range but extend to show more data
+        final_xlim = max(5.0, min(data_max * 1.3, 30))  # Extended reasonable range
     else:
-        final_xlim = 5
+        final_xlim = 10
     
     # Add stats text
     if stats_text:
