@@ -161,9 +161,9 @@ def get_project_samples_with_correlations(config: dict, n_sims: int, trajectory_
         for i in range(n_sims):
             # (a) Calculate adjusted software target based on hardware multiple
             if initial_hardware_multiple[i] > 0:
-                adjustment_factor = all_doublings * (all_doublings - software_only_doublings) * (np.log(1/initial_hardware_multiple[i]) / np.log(4.5**2))
+                adjustment_factor = all_doublings - (all_doublings - software_only_doublings) * (np.log((4.5**2)*initial_hardware_multiple[i]) / np.log(4.5**2))
                 software_targets[i] = research_stock_at_present_day * (2 ** adjustment_factor)
-            else:
+            else:  
                 software_targets[i] = software_research_stock_at_sc  # Fallback to default
             
             # (b) Calculate current software stock based on months behind
@@ -770,27 +770,64 @@ def create_milestone_timeline_plot(all_milestone_dates: list[list[datetime]], co
         if not visible_data:
             print(f"Warning: No data in visible range for {milestone}")
             continue
-            
-        # Calculate KDE on visible data
-        kde = gaussian_kde(visible_data)
         
-        # Create x range for plotting
-        x_range = np.linspace(start_year, MAX_GRAPH_YEAR, 200000)
-        density = kde(x_range)
-        
-        # Normalize density to sum to 1 over visible range - fix division by zero
-        density_sum = np.sum(density)
-        if density_sum > 0:
-            density = density / density_sum * (len(visible_data) / len(milestone_data))
-        else:
-            density = np.zeros_like(density)  # Fallback if density is all zeros
-        
-        # Plot with different colors for each milestone
+        # Define colors for each milestone
         colors = ["#900000", "#004000", "#000090"]
-        ax.plot(x_range, density, '-', color=colors[i], label=milestone,
-                linewidth=2, alpha=0.8, zorder=2)
-        ax.fill_between(x_range, density, color=colors[i], alpha=0.1)
         milestone_full = ["Superhuman\n  AI Researcher", "Superintelligent\n  AI Researcher", "Generally\n  Superintelligent"]
+        
+        # Try to calculate KDE, with fallback to histogram or vertical line if it fails
+        try:
+            # Check if data has sufficient variance for KDE
+            data_variance = np.var(visible_data)
+            unique_values = len(set(visible_data))
+            
+            if data_variance < 1e-10 or unique_values < 3:
+                raise ValueError("Insufficient data variance for KDE")
+            
+            kde = gaussian_kde(visible_data)
+            
+            # Create x range for plotting
+            x_range = np.linspace(start_year, MAX_GRAPH_YEAR, 200000)
+            density = kde(x_range)
+            
+            # Normalize density to sum to 1 over visible range - fix division by zero
+            density_sum = np.sum(density)
+            if density_sum > 0:
+                density = density / density_sum * (len(visible_data) / len(milestone_data))
+            else:
+                density = np.zeros_like(density)  # Fallback if density is all zeros
+            
+            # Plot with different colors for each milestone
+            ax.plot(x_range, density, '-', color=colors[i], label=milestone,
+                    linewidth=2, alpha=0.8, zorder=2)
+            ax.fill_between(x_range, density, color=colors[i], alpha=0.1)
+            
+        except (np.linalg.LinAlgError, ValueError) as e:
+            print(f"Warning: KDE failed for {milestone} due to insufficient data variance. Using fallback visualization.")
+            
+            # Fallback 1: Try histogram if we have enough distinct values
+            if len(set(visible_data)) > 1:
+                # Create histogram
+                data_min = min(visible_data)
+                data_max = max(visible_data)
+                if data_max > data_min:
+                    bins = np.linspace(data_min, data_max, min(20, len(set(visible_data))))
+                    hist, bin_edges = np.histogram(visible_data, bins=bins, density=True)
+                    bin_centers = (bin_edges[:-1] + bin_edges[1:]) / 2
+                    
+                    # Plot as step function
+                    ax.step(bin_centers, hist, where='mid', color=colors[i], 
+                           label=milestone, linewidth=2, alpha=0.8, zorder=2)
+                    ax.fill_between(bin_centers, hist, step='mid', color=colors[i], alpha=0.1)
+                else:
+                    # Fallback 2: All values are the same, plot a vertical line
+                    ax.axvline(x=data_min, color=colors[i], linestyle='-', linewidth=3,
+                             alpha=0.8, label=f"{milestone} (Consistent)", zorder=2)
+            else:
+                # Fallback 2: All values are the same, plot a vertical line  
+                ax.axvline(x=visible_data[0], color=colors[i], linestyle='-', linewidth=3,
+                         alpha=0.8, label=f"{milestone} (Consistent)", zorder=2)
+        
         # Add statistics text using full data with month and year format
         if (p90 > 2100): 
             stats = (
