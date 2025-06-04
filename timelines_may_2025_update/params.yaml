@@ -40,7 +40,7 @@ forecasters:
        h_sat_ci: [0.5, 15.0]     # 80% CI for horizon at RE-Bench saturation in hours
        h_SC_ci: [0.05, 6]  # 80% initial time horizon needed to achieve SC once it's increased via other gaps being crossed, in months
        horizon_doubling_time_ci: [0.5, 18.0]          # Base doubling time in months
-       present_day_prog_multiplier_ci: [0.01, 0.6]   # Progress multiplier at present day - 1
+       present_day_prog_multiplier_ci: [0.02, 0.1]   # Progress multiplier at t_start relative to 2023 - 1
        v_algorithmic_sat_ci: [0.05, 0.6]   # Progress multiplier at RE-Bench saturation - 1
        v_algorithmic_SC_ci: [1.5, 40.0]   # Progress multiplier at SC - 1
        t_sat_ci: ["2025-09-01", "2031-01-01"]  # 80% CI for date when capability saturates
