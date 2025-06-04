@@ -13,6 +13,7 @@ pandas = "^2.2.3"
 scipy = "^1.15.2"
 matplotlib = "^3.10.1"
 tqdm = "^4.67.1"
+python-dateutil = "^2.9.0.post0"
 
 
 [build-system]

@@ -4,14 +4,20 @@ from scipy.stats import norm, lognorm, gaussian_kde
 import matplotlib.pyplot as plt
 import matplotlib.font_manager as fm
 import yaml
+import json
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timedelta
 from tqdm import tqdm
 
 def load_config(config_path: str) -> dict:
     """Load configuration from YAML file."""
     with open(config_path, 'r') as f:
         return yaml.safe_load(f)
+
+def load_research_trajectory_data(trajectory_path: str) -> dict:
+    """Load research trajectory data from JSON file."""
+    with open(trajectory_path, 'r') as f:
+        return json.load(f)
 
 def get_lognormal_from_80_ci(lower_bound, upper_bound):
     """Get lognormal distribution parameters from 80% confidence interval."""
@@ -30,44 +36,185 @@ def get_lognormal_from_80_ci(lower_bound, upper_bound):
     # Return the lognormal distribution
     return lognorm(s=sigma, scale=np.exp(mu))
 
-def get_project_progress_samples(config: dict, n_sims: int) -> dict:
-    """Generate progress rate samples for each project using lognormal distributions with ceilings."""
-    project_samples = {}
+def lookup_research_stock_by_date(trajectory_data: dict, target_date: datetime, trajectory_name: str = "Eli") -> float:
+    """Look up median research stock value for a given date in the trajectory data."""
+    trajectory = trajectory_data[trajectory_name]["trajectory"]
     
-    for project_name, params in config["projects"].items():
-        # Check if using new lognormal format or old fixed format
-        if isinstance(params, dict) and "lower_bound" in params:
-            # New lognormal format
-            lower_bound = params["lower_bound"]
-            upper_bound = params["upper_bound"]
-            ceiling = params["ceiling"]
-            
-            # Generate lognormal samples
-            dist = get_lognormal_from_80_ci(lower_bound, upper_bound)
-            samples = dist.rvs(n_sims)
-            
-            # Apply ceiling constraint
-            samples = np.minimum(samples, ceiling)
-            
-            project_samples[project_name] = samples
+    # Convert target date to decimal year
+    target_year = target_date.year + target_date.timetuple().tm_yday / 365.25
+    
+    # Find the closest time point in the trajectory
+    times = [point["time"] for point in trajectory]
+    closest_idx = np.argmin([abs(t - target_year) for t in times])
+    
+    return trajectory[closest_idx]["median_research_stock"]
+
+def get_project_samples_with_correlations(config: dict, n_sims: int, trajectory_data: dict) -> dict:
+    """Generate correlated samples for project parameters."""
+    project_samples = {}
+    projects = list(config["projects"].keys())
+    
+    # Extract config values for present day to SC info
+    present_day_to_sc_info = config["present_day_to_sc_info"]
+    research_stock_at_present_day = present_day_to_sc_info["research_stock_at_present_day"]
+    software_research_stock_at_sc = present_day_to_sc_info["software_research_stock_at_sc"]
+    software_plus_hardware_equivalent_research_stock_at_sc = present_day_to_sc_info["software_plus_hardware_equivalent_research_stock_at_sc"]
+    
+    # Calculate reference doublings
+    all_doublings = np.log2(software_plus_hardware_equivalent_research_stock_at_sc / research_stock_at_present_day)
+    software_only_doublings = np.log2(software_research_stock_at_sc / research_stock_at_present_day)
+    
+    # Parse starting time
+    start_date = datetime.strptime(config["starting_time"], "%B %d %Y")
+    
+    # Separate leading and non-leading projects
+    leading_projects = [p for p in projects if p == "Leading Project"]
+    non_leading_projects = [p for p in projects if p != "Leading Project"]
+    
+    # For non-leading projects, generate correlated software progress rates
+    software_progress_correlation = 0.5  # Moderate correlation between non-leading projects
+    hardware_software_correlation = 0.8  # High correlation within each project
+    
+    # Generate correlated samples for non-leading projects' software progress rates
+    if len(non_leading_projects) > 1:
+        # Create correlation matrix for software progress rates of non-leading projects
+        n_non_leading = len(non_leading_projects)
+        progress_corr_matrix = np.full((n_non_leading, n_non_leading), software_progress_correlation)
+        np.fill_diagonal(progress_corr_matrix, 1.0)
+        
+        # Generate correlated normal samples
+        correlated_normal = np.random.multivariate_normal(np.zeros(n_non_leading), progress_corr_matrix, n_sims)
+        correlated_uniform_progress = norm.cdf(correlated_normal)
+    else:
+        correlated_uniform_progress = np.random.random((n_sims, len(non_leading_projects)))
+    
+    for _, project_name in enumerate(projects):
+        params = config["projects"][project_name]
+        
+        # Sample the three main parameters with correlations
+        # For the Leading Project, use fixed values
+        if project_name == "Leading Project":
+            # Use fixed values for leading project
+            initial_software_months_behind = np.zeros(n_sims)  # Leading project is not behind
+            initial_hardware_multiple = np.ones(n_sims)  # Leading project has 1x hardware
+            software_progress_rate = np.ones(n_sims)  # Leading project has 1x progress rate
         else:
-            # Old fixed format - create array of identical values
-            fixed_rate = params if isinstance(params, (int, float)) else 1.0
-            project_samples[project_name] = np.full(n_sims, fixed_rate)
+            # Sample correlated parameters for non-leading projects
+            non_leading_idx = non_leading_projects.index(project_name)
+            
+            # Sample initial_software_months_behind (independent)
+            months_behind_params = params["initial_software_months_behind"]
+            p_zero, lower, upper, ceiling = months_behind_params
+            
+            # Generate samples
+            is_nonzero = np.random.random(n_sims) >= p_zero
+            if upper > lower:
+                dist = get_lognormal_from_80_ci(lower, upper)
+                samples = dist.rvs(n_sims)
+                samples = np.minimum(samples, ceiling)
+            else:
+                samples = np.full(n_sims, lower)
+            samples[~is_nonzero] = 0
+            initial_software_months_behind = samples
+            
+            # Sample correlated hardware multiple and software progress rate
+            corr_matrix = np.array([[1.0, hardware_software_correlation],
+                                   [hardware_software_correlation, 1.0]])
+            
+            # Generate correlated uniform samples for this project's hardware and software
+            normal_samples = np.random.multivariate_normal([0, 0], corr_matrix, n_sims)
+            uniform_samples = norm.cdf(normal_samples)
+            
+            # Convert to hardware multiple
+            hardware_params = params["initial_hardware_multiple"]
+            p_zero_hw, lower_hw, upper_hw, ceiling_hw = hardware_params
+            is_nonzero_hw = np.random.random(n_sims) >= p_zero_hw
+            if upper_hw > lower_hw:
+                hw_dist = get_lognormal_from_80_ci(lower_hw, upper_hw)
+                hw_samples = hw_dist.ppf(uniform_samples[:, 0])
+                hw_samples = np.minimum(hw_samples, ceiling_hw)
+            else:
+                hw_samples = np.full(n_sims, lower_hw)
+            hw_samples[~is_nonzero_hw] = 0
+            initial_hardware_multiple = hw_samples
+            
+            # Convert to software progress rate using the correlated samples across non-leading projects
+            software_params = params["software_progress_rate"]
+            p_zero_sw, lower_sw, upper_sw, ceiling_sw = software_params
+            is_nonzero_sw = np.random.random(n_sims) >= p_zero_sw
+            if upper_sw > lower_sw:
+                sw_dist = get_lognormal_from_80_ci(lower_sw, upper_sw)
+                # Use the cross-project correlated uniforms for software progress rate
+                sw_samples = sw_dist.ppf(correlated_uniform_progress[:, non_leading_idx])
+                sw_samples = np.minimum(sw_samples, ceiling_sw)
+            else:
+                sw_samples = np.full(n_sims, lower_sw)
+            sw_samples[~is_nonzero_sw] = 0
+            software_progress_rate = sw_samples
+        
+        # Calculate target SC research stock based on hardware multiple
+        software_targets = np.zeros(n_sims)
+        current_software_stocks = np.zeros(n_sims)
+        remaining_human_only_years = np.zeros(n_sims)
+        initial_speedups = np.zeros(n_sims)
+        
+        for i in range(n_sims):
+            # (a) Calculate adjusted software target based on hardware multiple
+            if initial_hardware_multiple[i] > 0:
+                adjustment_factor = all_doublings * (all_doublings - software_only_doublings) * (np.log(1/initial_hardware_multiple[i]) / np.log(4.5**2))
+                software_targets[i] = research_stock_at_present_day * (2 ** adjustment_factor)
+            else:
+                software_targets[i] = software_research_stock_at_sc  # Fallback to default
+            
+            # (b) Calculate current software stock based on months behind
+            months_behind = initial_software_months_behind[i]
+            # Use simple timedelta for date arithmetic
+            lookup_date = start_date - timedelta(days=int(months_behind * 30.44))  # Average days per month
+            current_research_stock = lookup_research_stock_by_date(trajectory_data, lookup_date)
+            current_software_stocks[i] = current_research_stock / 9
+            
+            # (c) Calculate remaining human-only years and initial speedup
+            remaining_human_only_years[i] = max(0, software_targets[i] - current_software_stocks[i])
+            
+            # Calculate initial speedup based on progress percentage
+            if software_targets[i] > research_stock_at_present_day:
+                total_doublings_needed = np.log2(software_targets[i] / research_stock_at_present_day)
+                doublings_achieved = max(0, np.log2(max(current_software_stocks[i] / research_stock_at_present_day, 1)))
+                progress_ratio = min(doublings_achieved / total_doublings_needed, 1.0) if total_doublings_needed > 0 else 0
+                
+                # Exponential interpolation between PRESENT_DAY speed (1.07) and SC speed (5)
+                present_day_speed = config["speedups"]["PRESENT_DAY"]
+                sc_speed = config["speedups"]["SC"]
+                initial_speedups[i] = present_day_speed * (sc_speed / present_day_speed) ** progress_ratio
+            else:
+                initial_speedups[i] = config["speedups"]["SC"]  # Already at SC
+        
+        project_samples[project_name] = {
+            "initial_software_months_behind": initial_software_months_behind,
+            "initial_hardware_multiple": initial_hardware_multiple,
+            "software_progress_rate": software_progress_rate,
+            "software_target": software_targets,
+            "current_software_stock": current_software_stocks,
+            "remaining_human_only_years": remaining_human_only_years,
+            "initial_speedup": initial_speedups
+        }
     
     return project_samples
 
-def get_project_starting_positions(config: dict) -> dict:
-    """Extract starting positions for each project from config."""
-    starting_positions = {}
+def get_project_progress_samples(config: dict, n_sims: int) -> dict:
+    """Generate progress rate samples for each project using lognormal distributions with ceilings."""
+    # Load trajectory data for the new calculation
+    trajectory_data = load_research_trajectory_data("research_trajectory_data.json")
     
-    for project_name, params in config["projects"].items():
-        if isinstance(params, dict) and "starting_position" in params:
-            starting_positions[project_name] = params["starting_position"]
-        else:
-            starting_positions[project_name] = 0.0  # Default to starting at beginning
+    # Use the new correlated sampling function
+    project_samples = get_project_samples_with_correlations(config, n_sims, trajectory_data)
     
-    return starting_positions
+    # Return just the software progress rates for compatibility with existing code
+    progress_rates = {}
+    for project_name, samples in project_samples.items():
+        progress_rates[project_name] = samples["software_progress_rate"]
+    
+    return progress_rates
 
 def get_milestone_samples(config: dict, n_sims: int, correlation: float = 0.7) -> dict:
     """Generate samples for milestone timings and speeds with correlation between gap sizes."""
@@ -218,14 +365,15 @@ def run_phase_simulation(gap: float, start_speed: float, end_speed: float, progr
     
     return calendar_time
 
-def run_single_simulation_with_tracking(samples: dict, sim_idx: int, progress_rate: float = 1.0, starting_position: float = 0.0) -> tuple[list[datetime], list[float]]:
+def run_single_simulation_with_tracking(samples: dict, sim_idx: int, progress_rate: float = 1.0, remaining_years_to_sc: float = None, initial_speedup: float = None) -> tuple[list[datetime], list[float]]:
     """Run a single simulation and track both milestone dates and phase durations.
     
     Args:
         samples: Dictionary containing milestone samples
         sim_idx: Simulation index
         progress_rate: Rate at which this actor makes progress (1.0 = normal)
-        starting_position: How many years of progress toward SC have already been completed
+        remaining_years_to_sc: Calculated remaining human-only years to SC (new method)
+        initial_speedup: Calculated initial speedup for this project (new method)
     """
     milestone_dates = []
     phase_calendar_days = []
@@ -235,14 +383,18 @@ def run_single_simulation_with_tracking(samples: dict, sim_idx: int, progress_ra
     milestones = ["SC", "SAR", "SIAR", "ASI"] # "WS"
     
     # First, handle the journey from PRESENT_DAY to SC
-    if "PRESENT_DAY to SC" in samples["time_gaps"]:
-        base_gap_to_sc = samples["time_gaps"]["PRESENT_DAY to SC"][sim_idx]
-        remaining_gap_to_sc = max(0, base_gap_to_sc - starting_position * 365)  # Convert starting_position to days
+    if remaining_years_to_sc is not None:
+        # Use the new calculated method
+        remaining_gap_to_sc = remaining_years_to_sc * 365  # Convert to days
         
         if remaining_gap_to_sc > 0:
             # Still need to complete journey to SC
-            # Use speedup from PRESENT_DAY (1.02) to SC (5)
-            present_day_speed = samples["speeds"].get("PRESENT_DAY", 1.02)
+            # Use the calculated initial speedup
+            if initial_speedup is not None:
+                present_day_speed = initial_speedup
+            else:
+                present_day_speed = samples["speeds"].get("PRESENT_DAY", 1.07)
+            
             sc_speed = samples["speeds"]["SC"]
             if isinstance(sc_speed, np.ndarray):
                 sc_speed = sc_speed[sim_idx]
@@ -262,6 +414,10 @@ def run_single_simulation_with_tracking(samples: dict, sim_idx: int, progress_ra
             # Already at SC, no time needed
             milestone_dates.append(current_date)
             phase_calendar_days.append(0)
+    else:
+        # No PRESENT_DAY to SC gap defined, assume already at SC
+        milestone_dates.append(current_date)
+        phase_calendar_days.append(0)
     
     # Run through each remaining milestone gap
     for i, milestone in enumerate(milestones[:-1]):
@@ -306,14 +462,14 @@ def run_single_simulation(samples: dict, sim_idx: int, progress_rate: float = 1.
     milestone_dates, _ = run_single_simulation_with_tracking(samples, sim_idx, progress_rate)
     return milestone_dates
 
-def run_multi_project_simulation_with_tracking(samples: dict, sim_idx: int, project_progress_samples: dict, project_starting_positions: dict) -> tuple[dict, list[datetime], dict]:
+def run_multi_project_simulation_with_tracking(samples: dict, sim_idx: int, project_progress_samples: dict, project_samples: dict = None) -> tuple[dict, list[datetime], dict]:
     """Run multi-project simulation with detailed tracking.
     
     Args:
         samples: Milestone timing samples
         sim_idx: Simulation index
         project_progress_samples: Dictionary mapping project names to arrays of progress rate samples
-        project_starting_positions: Dictionary mapping project names to starting positions (in years)
+        project_samples: Full project samples with remaining years and initial speedups (optional)
     
     Returns:
         Tuple of (project_results, first_milestone_dates, project_phase_durations)
@@ -324,11 +480,20 @@ def run_multi_project_simulation_with_tracking(samples: dict, sim_idx: int, proj
     # Run simulation for each project with tracking
     for project_name, progress_rate_samples in project_progress_samples.items():
         progress_rate = progress_rate_samples[sim_idx]  # Get rate for this simulation
-        starting_position = project_starting_positions.get(project_name, 0.0)
         
-        # Use the original samples (don't adjust start time)
-        # Starting position will be handled inside the simulation
-        milestone_dates, phase_durations = run_single_simulation_with_tracking(samples, sim_idx, progress_rate, starting_position)
+        # Get remaining years and initial speedup if available
+        remaining_years_to_sc = None
+        initial_speedup = None
+        if project_samples and project_name in project_samples:
+            remaining_years_to_sc = project_samples[project_name]["remaining_human_only_years"][sim_idx]
+            initial_speedup = project_samples[project_name]["initial_speedup"][sim_idx]
+        
+        # Run simulation with the project-specific parameters
+        milestone_dates, phase_durations = run_single_simulation_with_tracking(
+            samples, sim_idx, progress_rate,
+            remaining_years_to_sc=remaining_years_to_sc,
+            initial_speedup=initial_speedup
+        )
         project_results[project_name] = milestone_dates
         project_phase_durations[project_name] = phase_durations
     
@@ -350,6 +515,185 @@ def run_multi_project_simulation_with_tracking(samples: dict, sim_idx: int, proj
             first_milestone_dates.append(datetime(9999, 12, 31))
     
     return project_results, first_milestone_dates, project_phase_durations
+
+def run_multi_project_takeoff_simulation(config_path: str = "takeoff_params.yaml") -> tuple[plt.Figure, dict]:
+    """Run multi-project takeoff simulation and create visualizations."""
+    print("Loading configuration...")
+    config = load_config(config_path)
+    plotting_style = config["plotting_style"]
+    
+    # Check if projects are defined in config
+    if "projects" not in config:
+        print("No projects defined in config. Running single-project simulation instead.")
+        return run_takeoff_simulation(config_path)
+    
+    # Load trajectory data and generate full project samples
+    print("Loading research trajectory data...")
+    trajectory_data = load_research_trajectory_data("research_trajectory_data.json")
+    
+    print("\nGenerating project samples with correlations...")
+    project_samples = get_project_samples_with_correlations(config, config["simulation"]["n_sims"], trajectory_data)
+    
+    # Generate project progress rate samples for compatibility
+    print("\nGenerating project progress rate samples...")
+    project_progress_samples = get_project_progress_samples(config, config["simulation"]["n_sims"])
+    
+    # Print statistics for project parameters
+    print("Project configurations:")
+    for project_name, samples in project_samples.items():
+        progress_rates = samples["software_progress_rate"]
+        hardware_multiples = samples["initial_hardware_multiple"] 
+        months_behind = samples["initial_software_months_behind"]
+        remaining_years = samples["remaining_human_only_years"]
+        
+        print(f"  {project_name}:")
+        print(f"    Progress rates: 10th={np.percentile(progress_rates, 10):.2f}x, 50th={np.percentile(progress_rates, 50):.2f}x, 90th={np.percentile(progress_rates, 90):.2f}x")
+        print(f"    Hardware multiples: 10th={np.percentile(hardware_multiples, 10):.3f}x, 50th={np.percentile(hardware_multiples, 50):.3f}x, 90th={np.percentile(hardware_multiples, 90):.3f}x")
+        print(f"    Months behind: 10th={np.percentile(months_behind, 10):.1f}, 50th={np.percentile(months_behind, 50):.1f}, 90th={np.percentile(months_behind, 90):.1f}")
+        print(f"    Remaining years to SC: 10th={np.percentile(remaining_years, 10):.2f}, 50th={np.percentile(remaining_years, 50):.2f}, 90th={np.percentile(remaining_years, 90):.2f}")
+    
+    # Set up fonts
+    fonts = setup_plotting_style(plotting_style)
+    
+    # Generate samples (shared across all projects)
+    print("\nGenerating milestone samples...")
+    samples = get_milestone_samples(config, config["simulation"]["n_sims"])
+    
+    # Run multi-project simulations
+    print("\nRunning multi-project simulations...")
+    all_first_milestone_dates = []
+    all_project_results = []
+    all_project_phase_durations = []
+    
+    for i in tqdm(range(config["simulation"]["n_sims"]), desc="Simulations"):
+        project_results, first_milestone_dates, project_phase_durations = run_multi_project_simulation_with_tracking(
+            samples, i, project_progress_samples, project_samples
+        )
+        all_first_milestone_dates.append(first_milestone_dates)
+        all_project_results.append(project_results)
+        all_project_phase_durations.append(project_phase_durations)
+    
+    # Print summary statistics
+    print("\nFirst-to-achieve milestone statistics:")
+    milestones = ["SC", "SAR", "SIAR", "ASI"]
+    for i, milestone in enumerate(milestones):
+        milestone_years = [dates[i].year + dates[i].timetuple().tm_yday/365 
+                          for dates in all_first_milestone_dates 
+                          if i < len(dates) and dates[i].year < 9999]
+        
+        if milestone_years:
+            p10 = np.percentile(milestone_years, 10)
+            p50 = np.percentile(milestone_years, 50)
+            p90 = np.percentile(milestone_years, 90)
+            print(f"{milestone}: 10th={p10:.1f}, 50th={p50:.1f}, 90th={p90:.1f}")
+        else:
+            print(f"{milestone}: No valid data")
+    
+    # Analysis: Check which project wins SAR most often
+    print("\nSAR Winner Analysis:")
+    sar_winners = {}
+    projects = list(config["projects"].keys())
+    
+    ties_found = 0
+    
+    for sim_idx, sim_results in enumerate(all_project_results):
+        earliest_sar_date = None
+        winner = None
+        all_sar_dates = {}  # Track all SAR dates for this simulation
+        
+        for project_name in projects:
+            if project_name in sim_results and len(sim_results[project_name]) > 1:
+                sar_date = sim_results[project_name][1]  # SAR is now index 1 (SC=0, SAR=1)
+                if sar_date.year < 9999:  # Filter out capped values
+                    all_sar_dates[project_name] = sar_date
+                    if earliest_sar_date is None or sar_date < earliest_sar_date:
+                        earliest_sar_date = sar_date
+                        winner = project_name
+        
+        # Check for ties
+        if earliest_sar_date is not None:
+            tied_winners = [name for name, date in all_sar_dates.items() if date == earliest_sar_date]
+            if len(tied_winners) > 1:
+                ties_found += 1
+                print(f"  TIE in simulation {sim_idx}: {tied_winners} all achieved SAR on {earliest_sar_date}")
+                print(f"    Main analysis chose: {winner}")
+                
+                # Print detailed parameters for tied projects
+                for tied_project in tied_winners:
+                    if tied_project in project_progress_samples and tied_project in project_samples:
+                        print(f"    {tied_project} parameters:")
+                        print(f"      Progress rate: {project_progress_samples[tied_project][sim_idx]:.3f}x")
+                        print(f"      Hardware multiple: {project_samples[tied_project]['initial_hardware_multiple'][sim_idx]:.3f}x")
+                        print(f"      Months behind: {project_samples[tied_project]['initial_software_months_behind'][sim_idx]:.1f}")
+                        print(f"      Remaining years to SC: {project_samples[tied_project]['remaining_human_only_years'][sim_idx]:.3f}")
+                        print(f"      Initial speedup: {project_samples[tied_project]['initial_speedup'][sim_idx]:.3f}x")
+                        
+                        # Show the actual stock calculations that determine remaining years
+                        software_target = project_samples[tied_project]['software_target'][sim_idx]
+                        current_software_stock = project_samples[tied_project]['current_software_stock'][sim_idx]
+                        print(f"      Software target: {software_target:.3f}")
+                        print(f"      Current software stock: {current_software_stock:.3f}")
+                        print(f"      Stock difference: {software_target - current_software_stock:.3f}")
+                        
+                        # Show SC achievement date too
+                        if tied_project in sim_results and len(sim_results[tied_project]) > 0:
+                            sc_date = sim_results[tied_project][0]
+                            sc_year = sc_date.year + sc_date.timetuple().tm_yday/365
+                            print(f"      SC achieved: {sc_year:.3f}")
+                            sc_to_sar_days = (all_sar_dates[tied_project] - sc_date).days
+                            print(f"      SC to SAR time: {sc_to_sar_days/365:.3f} years")
+                
+                # Also show the SC to SAR gap sample for this simulation
+                sc_to_sar_gap_years = samples["time_gaps"]["SC to SAR"][sim_idx] / 365
+                print(f"    SC to SAR gap sample for this simulation: {sc_to_sar_gap_years:.3f} years")
+        
+        if winner:
+            sar_winners[winner] = sar_winners.get(winner, 0) + 1
+    
+    print(f"Total ties found: {ties_found}")
+    
+    total_wins = sum(sar_winners.values())
+    print(f"Total valid simulations: {total_wins}")
+    for project, wins in sorted(sar_winners.items(), key=lambda x: x[1], reverse=True):
+        percentage = (wins / total_wins) * 100 if total_wins > 0 else 0
+        print(f"  {project}: {wins} wins ({percentage:.1f}%)")
+    
+    leading_lab_always_wins = sar_winners.get("Leading Project", 0) == total_wins
+    print(f"\nDoes Leading Project always win SAR? {leading_lab_always_wins}")
+    if not leading_lab_always_wins:
+        print("-> Other projects sometimes beat Leading Project!")
+    else:
+        print("-> Leading Project wins every time")
+    
+    # Create plots
+    print("\nGenerating plots...")
+    fig_multi_timeline = create_multi_project_timeline_plot(all_first_milestone_dates, all_project_results, config, plotting_style, fonts)
+    fig_project_delays = create_project_delay_plot(all_project_results, config, plotting_style, fonts, project_progress_samples)
+    
+    # Also create single-project plots for the fastest project (for comparison)
+    fastest_project = min(project_progress_samples.keys(), key=lambda x: 1/np.mean(project_progress_samples[x]))  # Highest mean progress rate
+    fastest_milestone_dates = [results[fastest_project] for results in all_project_results]
+    fig_fastest_timeline = create_milestone_timeline_plot(fastest_milestone_dates, config, plotting_style, fonts)
+    fig_fastest_phases = create_phase_duration_plot(fastest_milestone_dates, config, plotting_style, fonts)
+    
+    # Create output directory if it doesn't exist
+    output_dir = Path("figures")
+    output_dir.mkdir(parents=True, exist_ok=True)
+    
+    print("\nSaving plots...")
+    fig_multi_timeline.savefig(output_dir / "multi_project_takeoff_timeline.png", dpi=300, bbox_inches="tight")
+    fig_project_delays.savefig(output_dir / "project_sar_delays.png", dpi=300, bbox_inches="tight")
+    fig_fastest_timeline.savefig(output_dir / f"fastest_project_{fastest_project.replace(' ', '_')}_timeline.png", dpi=300, bbox_inches="tight")
+    fig_fastest_phases.savefig(output_dir / f"fastest_project_{fastest_project.replace(' ', '_')}_phases.png", dpi=300, bbox_inches="tight")
+    
+    # Close figures to free memory
+    plt.close("all")
+    
+    return fig_multi_timeline, {
+        "first_milestone_dates": all_first_milestone_dates,
+        "project_results": all_project_results,
+        "project_phase_durations": all_project_phase_durations
+    }
 
 def setup_plotting_style(plotting_style: dict):
     """Set up matplotlib style according to config."""
@@ -903,6 +1247,7 @@ def create_project_delay_plot(all_project_results: list[dict], config: dict, plo
     # Track which project wins each simulation to determine actual winners
     project_wins = {project: 0 for project in projects_for_delay}
     total_valid_sims = 0
+    delay_plot_ties = 0
     
     for sim_idx, sim_results in enumerate(all_project_results):
         # Find the earliest SAR date across all projects in this simulation
@@ -922,6 +1267,10 @@ def create_project_delay_plot(all_project_results: list[dict], config: dict, plo
             total_valid_sims += 1
             # Find the winner(s) for this simulation
             winners = [name for name, date in valid_projects.items() if date == earliest_sar_date]
+            if len(winners) > 1:
+                delay_plot_ties += 1
+                print(f"  DELAY PLOT TIE in simulation {sim_idx}: {winners}")
+            
             for winner in winners:
                 project_wins[winner] += 1 / len(winners)  # Split wins if there's a tie
             
@@ -930,6 +1279,10 @@ def create_project_delay_plot(all_project_results: list[dict], config: dict, plo
                     delay_days = (valid_projects[project_name] - earliest_sar_date).days
                     delay_years = delay_days / 365.0
                     project_delays[project_name].append(delay_years)
+    
+    print(f"\nDelay plot analysis found {delay_plot_ties} ties")
+    print(f"Leading Project wins in delay plot: {project_wins.get('Leading Project', 0):.2f} out of {total_valid_sims}")
+    print(f"Leading Project win rate in delay plot: {project_wins.get('Leading Project', 0) / total_valid_sims * 100:.1f}%")
     
     # Debug: Print delay statistics
     print(f"\nDelay Statistics:")
@@ -946,12 +1299,13 @@ def create_project_delay_plot(all_project_results: list[dict], config: dict, plo
         print(f"\nSimulation {sim_idx}:")
         sim_results = all_project_results[sim_idx]
         
-        # Get progress rates for this simulation
-        print("  Progress rates:")
-        for project_name in projects:
-            if project_name in project_progress_samples:
-                rate = project_progress_samples[project_name][sim_idx]
-                print(f"    {project_name}: {rate:.3f}x")
+        # Get progress rates for this simulation if available
+        if project_progress_samples:
+            print("  Progress rates:")
+            for project_name in projects:
+                if project_name in project_progress_samples:
+                    rate = project_progress_samples[project_name][sim_idx]
+                    print(f"    {project_name}: {rate:.3f}x")
         
         # Get SAR achievement dates
         print("  SAR achievement dates:")
@@ -989,16 +1343,23 @@ def create_project_delay_plot(all_project_results: list[dict], config: dict, plo
             # Check if this project has meaningful delay variation
             delay_variation = p90 - p10
             
-            # Get project parameters for labeling
+            # Get project parameters for labeling - fix the parameter access
             project_params = config["projects"][project_name]
-            if isinstance(project_params, dict) and "lower_bound" in project_params:
-                # New format - show median of range
-                median_rate = (project_params["lower_bound"] + project_params["upper_bound"]) / 2
+            if project_progress_samples and project_name in project_progress_samples:
+                # Use actual median from samples
+                median_rate = np.median(project_progress_samples[project_name])
                 rate_label = f"~{median_rate:.1f}x"
+            elif isinstance(project_params, dict) and "software_progress_rate" in project_params:
+                # New format - get median from config parameter range
+                params = project_params["software_progress_rate"]
+                if len(params) >= 3:  # [p_zero, lower, upper, ceiling]
+                    median_rate = (params[1] + params[2]) / 2  # (lower + upper) / 2
+                    rate_label = f"~{median_rate:.1f}x"
+                else:
+                    rate_label = "unknown rate"
             else:
-                # Old format - show fixed rate
-                progress_rate = project_params if isinstance(project_params, (int, float)) else 1.0
-                rate_label = f"{progress_rate:.1f}x"
+                # Fallback
+                rate_label = "1.0x"
             
             # Check if this project actually wins most/all simulations
             win_rate = project_wins[project_name] / total_valid_sims if total_valid_sims > 0 else 0
@@ -1096,6 +1457,28 @@ def create_project_delay_plot(all_project_results: list[dict], config: dict, plo
                 stats_text = stats
             else:
                 stats_text += f"\n\n{stats}"
+        elif delays:  # Has some data but not enough for full analysis
+            win_rate = project_wins[project_name] / total_valid_sims if total_valid_sims > 0 else 0
+            
+            # Get rate label
+            if project_progress_samples and project_name in project_progress_samples:
+                median_rate = np.median(project_progress_samples[project_name])
+                rate_label = f"~{median_rate:.1f}x"
+            else:
+                rate_label = "1.0x"
+            
+            # Add basic stats
+            stats = f"{project_name} ({rate_label}):\n  Wins {win_rate:.0%}"
+            if proj_idx == 0:
+                stats_text = stats
+            else:
+                stats_text += f"\n\n{stats}"
+    
+    # If no meaningful data to plot, show a message
+    if not has_plotted_data and not stats_text:
+        ax.text(0.5, 0.5, "No delay data available\n(All projects may achieve SAR simultaneously)", 
+                transform=ax.transAxes, ha='center', va='center', fontsize=14)
+        stats_text = "No delay data available"
     
     # Determine final x-axis limit based on actual data, excluding always-zero delays
     non_zero_delays = [delay for delays in project_delays.values() for delay in delays if delay > 0.01]
@@ -1107,12 +1490,13 @@ def create_project_delay_plot(all_project_results: list[dict], config: dict, plo
         final_xlim = 5
     
     # Add stats text
-    text = ax.text(0.68, 1, stats_text,
-            transform=ax.transAxes,
-            verticalalignment='top',
-            horizontalalignment='left',
-            fontsize=plotting_style["font"]["sizes"]["small"])
-    text.set_fontproperties(fonts['regular_legend'])
+    if stats_text:
+        text = ax.text(0.68, 1, stats_text,
+                transform=ax.transAxes,
+                verticalalignment='top',
+                horizontalalignment='left',
+                fontsize=plotting_style["font"]["sizes"]["small"])
+        text.set_fontproperties(fonts['regular_legend'])
     
     # Configure plot styling
     ax.set_xlim(0, final_xlim)
@@ -1129,7 +1513,7 @@ def create_project_delay_plot(all_project_results: list[dict], config: dict, plo
     ax.spines['right'].set_visible(False)
     
     # Add legend
-    legend = ax.legend(loc='upper right', fontsize=plotting_style["font"]["sizes"]["legend"])
+    legend = ax.legend(loc='upper left', fontsize=plotting_style["font"]["sizes"]["legend"])
     for text in legend.get_texts():
         text.set_fontproperties(fonts['regular_legend'])
     
@@ -1225,131 +1609,6 @@ def validate_phase_durations(all_milestone_dates, all_phase_durations, start_dat
             if abs(stored - calculated) > 0.1:  # Allow small difference
                 if first_mismatch is None:
                     first_mismatch = (sim_idx, phase_idx, stored, calculated)
-
-def run_multi_project_takeoff_simulation(config_path: str = "takeoff_params.yaml") -> tuple[plt.Figure, dict]:
-    """Run multi-project takeoff simulation and create visualizations."""
-    print("Loading configuration...")
-    config = load_config(config_path)
-    plotting_style = config["plotting_style"]
-    
-    # Check if projects are defined in config
-    if "projects" not in config:
-        print("No projects defined in config. Running single-project simulation instead.")
-        return run_takeoff_simulation(config_path)
-    
-    # Generate project progress rate samples
-    print("\nGenerating project progress rate samples...")
-    project_progress_samples = get_project_progress_samples(config, config["simulation"]["n_sims"])
-    
-    # Get project starting positions
-    project_starting_positions = get_project_starting_positions(config)
-    
-    # Print statistics for progress rates and starting positions
-    print("Project configurations:")
-    for project_name, samples in project_progress_samples.items():
-        p10 = np.percentile(samples, 10)
-        p50 = np.percentile(samples, 50)
-        p90 = np.percentile(samples, 90)
-        starting_pos = project_starting_positions.get(project_name, 0.0)
-        print(f"  {project_name}: progress rates 10th={p10:.2f}x, 50th={p50:.2f}x, 90th={p90:.2f}x, starting position={starting_pos:.1f} years")
-    
-    # Set up fonts
-    fonts = setup_plotting_style(plotting_style)
-    
-    # Generate samples (shared across all projects)
-    print("\nGenerating milestone samples...")
-    samples = get_milestone_samples(config, config["simulation"]["n_sims"])
-    
-    # Run multi-project simulations
-    print("\nRunning multi-project simulations...")
-    all_first_milestone_dates = []
-    all_project_results = []
-    all_project_phase_durations = []
-    
-    for i in tqdm(range(config["simulation"]["n_sims"]), desc="Simulations"):
-        project_results, first_milestone_dates, project_phase_durations = run_multi_project_simulation_with_tracking(samples, i, project_progress_samples, project_starting_positions)
-        all_first_milestone_dates.append(first_milestone_dates)
-        all_project_results.append(project_results)
-        all_project_phase_durations.append(project_phase_durations)
-    
-    # Print summary statistics
-    print("\nFirst-to-achieve milestone statistics:")
-    milestones = ["SC", "SAR", "SIAR", "ASI"]
-    for i, milestone in enumerate(milestones):
-        milestone_years = [dates[i].year + dates[i].timetuple().tm_yday/365 
-                          for dates in all_first_milestone_dates 
-                          if i < len(dates) and dates[i].year < 9999]
-        
-        if milestone_years:
-            p10 = np.percentile(milestone_years, 10)
-            p50 = np.percentile(milestone_years, 50)
-            p90 = np.percentile(milestone_years, 90)
-            print(f"{milestone}: 10th={p10:.1f}, 50th={p50:.1f}, 90th={p90:.1f}")
-        else:
-            print(f"{milestone}: No valid data")
-    
-    # Analysis: Check which project wins SAR most often
-    print("\nSAR Winner Analysis:")
-    sar_winners = {}
-    projects = list(config["projects"].keys())
-    
-    for sim_idx, sim_results in enumerate(all_project_results):
-        earliest_sar_date = None
-        winner = None
-        
-        for project_name in projects:
-            if project_name in sim_results and len(sim_results[project_name]) > 1:
-                sar_date = sim_results[project_name][1]  # SAR is now index 1 (SC=0, SAR=1)
-                if sar_date.year < 9999:  # Filter out capped values
-                    if earliest_sar_date is None or sar_date < earliest_sar_date:
-                        earliest_sar_date = sar_date
-                        winner = project_name
-        
-        if winner:
-            sar_winners[winner] = sar_winners.get(winner, 0) + 1
-    
-    total_wins = sum(sar_winners.values())
-    print(f"Total valid simulations: {total_wins}")
-    for project, wins in sorted(sar_winners.items(), key=lambda x: x[1], reverse=True):
-        percentage = (wins / total_wins) * 100 if total_wins > 0 else 0
-        print(f"  {project}: {wins} wins ({percentage:.1f}%)")
-    
-    leading_lab_always_wins = sar_winners.get("Leading Lab", 0) == total_wins
-    print(f"\nDoes Leading Lab always win SAR? {leading_lab_always_wins}")
-    if not leading_lab_always_wins:
-        print("-> Other projects sometimes beat Leading Lab!")
-    else:
-        print("-> Leading Lab wins every time")
-    
-    # Create plots
-    print("\nGenerating plots...")
-    fig_multi_timeline = create_multi_project_timeline_plot(all_first_milestone_dates, all_project_results, config, plotting_style, fonts)
-    fig_project_delays = create_project_delay_plot(all_project_results, config, plotting_style, fonts, project_progress_samples)
-    
-    # Also create single-project plots for the fastest project (for comparison)
-    fastest_project = min(project_progress_samples.keys(), key=lambda x: 1/np.mean(project_progress_samples[x]))  # Highest mean progress rate
-    fastest_milestone_dates = [results[fastest_project] for results in all_project_results]
-    fig_fastest_timeline = create_milestone_timeline_plot(fastest_milestone_dates, config, plotting_style, fonts)
-    fig_fastest_phases = create_phase_duration_plot(fastest_milestone_dates, config, plotting_style, fonts)
-    
-    # Create output directory if it doesn't exist
-    output_dir = Path("figures")
-    output_dir.mkdir(parents=True, exist_ok=True)
-    
-    print("\nSaving plots...")
-    fig_multi_timeline.savefig(output_dir / "multi_project_takeoff_timeline.png", dpi=300, bbox_inches="tight")
-    fig_project_delays.savefig(output_dir / "project_sar_delays.png", dpi=300, bbox_inches="tight")
-    fig_fastest_timeline.savefig(output_dir / f"fastest_project_{fastest_project.replace(' ', '_')}_timeline.png", dpi=300, bbox_inches="tight")
-    fig_fastest_phases.savefig(output_dir / f"fastest_project_{fastest_project.replace(' ', '_')}_phases.png", dpi=300, bbox_inches="tight")
-    
-    # Close figures to free memory
-    plt.close("all")
-    
-    return fig_multi_timeline, {
-        "first_milestone_dates": all_first_milestone_dates,
-        "project_results": all_project_results,
-        "project_phase_durations": all_project_phase_durations
-    }
 
 if __name__ == "__main__":
     run_multi_project_takeoff_simulation()
