@@ -1,5 +1,10 @@
 starting_time: "March 31 2027" # Maybe change depending on Plan A scenario timing, may have to add support for starting post-SC
 
+# Simulation parameters
+simulation:
+  n_sims: 500 # Should be 5000 for full simulation
+  dt: 1  # days
+
 # These are based on the timelines simulation, should change if that changes.
 # In particular, see research_trajectory_data.json (divide by 9 then subtract 5.5 from the median research stock at SC)
 present_day_to_sc_info:
@@ -46,11 +51,6 @@ projects:
     initial_software_months_behind: [0, 1, 18, 24]
     initial_hardware_multiple: [0, 0.002, 0.05, 0.4]
     software_progress_rate: [0, 0.02, 0.3, 1]
-
-# Simulation parameters
-simulation:
-  n_sims: 50 # Should be 5000 for full simulation
-  dt: 1  # days
 
 # Plotting style configuration
 plotting_style:

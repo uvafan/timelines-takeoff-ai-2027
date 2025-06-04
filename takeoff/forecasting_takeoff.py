@@ -733,7 +733,9 @@ def create_milestone_timeline_plot(all_milestone_dates: list[list[datetime]], co
     bg_rgb = tuple(int(background_color.lstrip('#')[i:i+2], 16)/255 for i in (0, 2, 4))
     
     milestone_years = [[d.year + d.timetuple().tm_yday/365 for d in sim_dates] for sim_dates in all_milestone_dates]
+    # Fix the indexing bug: milestone_dates contains [SC, SAR, SIAR, ASI], so we need to adjust indices
     milestones = ["SAR", "SIAR", "ASI"] #, "WS"]
+    milestone_indices = [1, 2, 3]  # SAR=1, SIAR=2, ASI=3 (SC=0 is not plotted)
     
     fig = plt.figure(figsize=(12, 6), dpi=150, facecolor=bg_rgb)
     ax = fig.add_subplot(111)
@@ -747,7 +749,8 @@ def create_milestone_timeline_plot(all_milestone_dates: list[list[datetime]], co
         MAX_GRAPH_YEAR = 2032
         start_year = float(config["starting_time"].split()[-1])
 
-        milestone_data = [years[i] for years in milestone_years]
+        # Use the correct index to get the right milestone data
+        milestone_data = [years[milestone_indices[i]] for years in milestone_years if milestone_indices[i] < len(years)]
         
         # Calculate percentiles using full data
         p10 = np.percentile(milestone_data, 10)
