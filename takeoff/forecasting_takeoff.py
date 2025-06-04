@@ -669,6 +669,7 @@ def run_multi_project_takeoff_simulation(config_path: str = "takeoff_params.yaml
     print("\nGenerating plots...")
     fig_multi_timeline = create_multi_project_timeline_plot(all_first_milestone_dates, all_project_results, config, plotting_style, fonts)
     fig_project_delays = create_project_delay_plot(all_project_results, config, plotting_style, fonts, project_progress_samples)
+    fig_sc_timeline = create_project_sc_timeline_plot(all_project_results, config, plotting_style, fonts)
     
     # Also create single-project plots for the fastest project (for comparison)
     fastest_project = min(project_progress_samples.keys(), key=lambda x: 1/np.mean(project_progress_samples[x]))  # Highest mean progress rate
@@ -683,17 +684,14 @@ def run_multi_project_takeoff_simulation(config_path: str = "takeoff_params.yaml
     print("\nSaving plots...")
     fig_multi_timeline.savefig(output_dir / "multi_project_takeoff_timeline.png", dpi=300, bbox_inches="tight")
     fig_project_delays.savefig(output_dir / "project_sar_delays.png", dpi=300, bbox_inches="tight")
+    fig_sc_timeline.savefig(output_dir / "project_sc_timeline.png", dpi=300, bbox_inches="tight")
     fig_fastest_timeline.savefig(output_dir / f"fastest_project_{fastest_project.replace(' ', '_')}_timeline.png", dpi=300, bbox_inches="tight")
     fig_fastest_phases.savefig(output_dir / f"fastest_project_{fastest_project.replace(' ', '_')}_phases.png", dpi=300, bbox_inches="tight")
     
     # Close figures to free memory
     plt.close("all")
     
-    return fig_multi_timeline, {
-        "first_milestone_dates": all_first_milestone_dates,
-        "project_results": all_project_results,
-        "project_phase_durations": all_project_phase_durations
-    }
+    return fig_multi_timeline, {"milestone_dates": all_first_milestone_dates}
 
 def setup_plotting_style(plotting_style: dict):
     """Set up matplotlib style according to config."""
@@ -1589,21 +1587,31 @@ def run_takeoff_simulation(config_path: str = "takeoff_params.yaml") -> tuple[pl
     
     # Create plots
     print("\nGenerating plots...")
-    fig_timeline = create_milestone_timeline_plot(all_milestone_dates, config, plotting_style, fonts)
-    fig_phases = create_phase_duration_plot(all_milestone_dates, config, plotting_style, fonts)
+    fig_multi_timeline = create_multi_project_timeline_plot(all_first_milestone_dates, all_project_results, config, plotting_style, fonts)
+    fig_project_delays = create_project_delay_plot(all_project_results, config, plotting_style, fonts, project_progress_samples)
+    fig_sc_timeline = create_project_sc_timeline_plot(all_project_results, config, plotting_style, fonts)
+    
+    # Also create single-project plots for the fastest project (for comparison)
+    fastest_project = min(project_progress_samples.keys(), key=lambda x: 1/np.mean(project_progress_samples[x]))  # Highest mean progress rate
+    fastest_milestone_dates = [results[fastest_project] for results in all_project_results]
+    fig_fastest_timeline = create_milestone_timeline_plot(fastest_milestone_dates, config, plotting_style, fonts)
+    fig_fastest_phases = create_phase_duration_plot(fastest_milestone_dates, config, plotting_style, fonts)
     
     # Create output directory if it doesn't exist
     output_dir = Path("figures")
     output_dir.mkdir(parents=True, exist_ok=True)
     
     print("\nSaving plots...")
-    fig_timeline.savefig(output_dir / "takeoff_timeline.png", dpi=300, bbox_inches="tight")
-    fig_phases.savefig(output_dir / "phase_durations.png", dpi=300, bbox_inches="tight")
+    fig_multi_timeline.savefig(output_dir / "multi_project_takeoff_timeline.png", dpi=300, bbox_inches="tight")
+    fig_project_delays.savefig(output_dir / "project_sar_delays.png", dpi=300, bbox_inches="tight")
+    fig_sc_timeline.savefig(output_dir / "project_sc_timeline.png", dpi=300, bbox_inches="tight")
+    fig_fastest_timeline.savefig(output_dir / f"fastest_project_{fastest_project.replace(' ', '_')}_timeline.png", dpi=300, bbox_inches="tight")
+    fig_fastest_phases.savefig(output_dir / f"fastest_project_{fastest_project.replace(' ', '_')}_phases.png", dpi=300, bbox_inches="tight")
     
     # Close figures to free memory
     plt.close("all")
     
-    return fig_timeline, {"milestone_dates": all_milestone_dates}
+    return fig_multi_timeline, {"milestone_dates": all_first_milestone_dates}
 
 def validate_phase_durations(all_milestone_dates, all_phase_durations, start_date):
     """Validate phase durations from simulation match direct calculation.
@@ -1646,6 +1654,174 @@ def validate_phase_durations(all_milestone_dates, all_phase_durations, start_dat
             if abs(stored - calculated) > 0.1:  # Allow small difference
                 if first_mismatch is None:
                     first_mismatch = (sim_idx, phase_idx, stored, calculated)
+
+def create_project_sc_timeline_plot(all_project_results: list[dict], config: dict, plotting_style: dict, fonts: dict) -> plt.Figure:
+    """Create timeline plot showing SC achievement distributions for multiple projects.
+    
+    Args:
+        all_project_results: List of project results for each simulation
+        config: Configuration dictionary
+        plotting_style: Plotting style configuration
+        fonts: Font configuration
+    """
+    # Get background color
+    background_color = "#FFFEF8"
+    bg_rgb = tuple(int(background_color.lstrip('#')[i:i+2], 16)/255 for i in (0, 2, 4))
+    
+    fig = plt.figure(figsize=(12, 6), dpi=150, facecolor=bg_rgb)
+    ax = fig.add_subplot(111)
+    ax.set_facecolor(bg_rgb)
+    
+    # Project comparison - show SC distributions for each project
+    projects = list(config["projects"].keys())
+    project_colors = plt.cm.Set3(np.linspace(0, 1, len(projects)))
+    
+    # Extend the graph range to show full distributions
+    MAX_GRAPH_YEAR = 2050  # Extended to show more of the distributions
+    start_year = float(config["starting_time"].split()[-1])
+    
+    # Plot SC distributions for each project
+    stats_text = ""
+    for proj_idx, project_name in enumerate(projects):
+        project_sc_times = []
+        for sim_results in all_project_results:
+            if project_name in sim_results and len(sim_results[project_name]) > 0:
+                sc_date = sim_results[project_name][0]  # SC is at index 0
+                if sc_date.year < 9999:  # Filter out capped values
+                    project_sc_times.append(sc_date.year + sc_date.timetuple().tm_yday/365)
+        
+        if project_sc_times and len(project_sc_times) > 5:  # Lower threshold
+            # Calculate percentiles for stats
+            p10 = np.percentile(project_sc_times, 10)
+            p50 = np.percentile(project_sc_times, 50)
+            p90 = np.percentile(project_sc_times, 90)
+            
+            # Convert decimal years to month and year format for display
+            def year_to_date(year):
+                year_int = int(year)
+                if year_int > 9999:
+                    return f"{year_int}"
+                month = int((year - year_int) * 12) + 1
+                month_name = datetime(year_int, month, 1).strftime('%b')
+                return f"{month_name} {year_int}"
+            
+            # Filter data to visible range - use most of the data
+            visible_data = [x for x in project_sc_times if x <= MAX_GRAPH_YEAR]
+            
+            if visible_data:
+                # Check if we need special handling for Leading Project (all same values)
+                unique_visible = len(set(visible_data))
+                
+                if unique_visible <= 1:
+                    # All values are the same - plot vertical line
+                    median_sc = visible_data[0]
+                    ax.axvline(x=median_sc, color=project_colors[proj_idx], linestyle='-', linewidth=3,
+                             alpha=0.8, label=f"{project_name}", zorder=2)
+                    
+                elif unique_visible < 5:
+                    # Too few unique values for KDE, use histogram
+                    data_min = min(visible_data)
+                    data_max = max(visible_data)
+                    if data_max > data_min:
+                        bins = min(unique_visible, 10)
+                        hist, bin_edges = np.histogram(visible_data, bins=bins, density=True)
+                        bin_centers = (bin_edges[:-1] + bin_edges[1:]) / 2
+                        
+                        # Plot as step function
+                        ax.step(bin_centers, hist, where='mid', color=project_colors[proj_idx], 
+                               label=f"{project_name}", linewidth=2, alpha=0.8)
+                        ax.fill_between(bin_centers, hist, step='mid', color=project_colors[proj_idx], alpha=0.2)
+                    else:
+                        # Fallback to vertical line
+                        ax.axvline(x=data_min, color=project_colors[proj_idx], linestyle='-', linewidth=3,
+                                 alpha=0.8, label=f"{project_name}", zorder=2)
+                        
+                else:
+                    # Enough unique values for KDE
+                    try:
+                        kde = gaussian_kde(visible_data)
+                        
+                        # Create x range for plotting
+                        data_min = min(visible_data)
+                        data_max = max(visible_data)
+                        x_range = np.linspace(max(start_year, data_min - 0.5), min(MAX_GRAPH_YEAR, data_max + 0.5), 1000)
+                        density = kde(x_range)
+                        
+                        # Normalize density
+                        density_sum = np.sum(density)
+                        if density_sum > 0:
+                            density = density / density_sum * (len(visible_data) / len(project_sc_times))
+                        else:
+                            density = np.zeros_like(density)
+                        
+                        # Plot distribution
+                        ax.plot(x_range, density, '-', color=project_colors[proj_idx], 
+                               label=f"{project_name}", linewidth=2, alpha=0.8)
+                        ax.fill_between(x_range, density, color=project_colors[proj_idx], alpha=0.2)
+                        
+                    except (np.linalg.LinAlgError, ValueError) as e:
+                        # KDE failed, use histogram instead
+                        bins = min(20, unique_visible)
+                        hist, bin_edges = np.histogram(visible_data, bins=bins, density=True)
+                        bin_centers = (bin_edges[:-1] + bin_edges[1:]) / 2
+                        
+                        # Plot as step function
+                        ax.step(bin_centers, hist, where='mid', color=project_colors[proj_idx], 
+                               label=f"{project_name}", linewidth=2, alpha=0.8)
+                        ax.fill_between(bin_centers, hist, step='mid', color=project_colors[proj_idx], alpha=0.2)
+                
+                # Add to stats text
+                if (p90 > 2100):
+                    stats = (
+                        f"{project_name}:\n"
+                        f"  10th: {year_to_date(p10)}\n"
+                        f"  50th: {year_to_date(p50)}\n"
+                        f"  90th: >2100"
+                    )
+                else:
+                    stats = (
+                        f"{project_name}:\n"
+                        f"  10th: {year_to_date(p10)}\n"
+                        f"  50th: {year_to_date(p50)}\n"
+                        f"  90th: {year_to_date(p90)}"
+                    )
+                
+                if proj_idx == 0:
+                    stats_text = stats
+                else:
+                    stats_text += f"\n\n{stats}"
+    
+    # Add stats text
+    text = ax.text(0.68, 1, stats_text,
+            transform=ax.transAxes,
+            verticalalignment='top',
+            horizontalalignment='left',
+            fontsize=plotting_style["font"]["sizes"]["small"])
+    text.set_fontproperties(fonts['regular_legend'])
+    
+    # Configure plot styling
+    ax.set_xlim(start_year, MAX_GRAPH_YEAR)
+    ax.set_ylim(0, None)
+    ax.set_xlabel("Year", fontsize=plotting_style["font"]["sizes"]["axis_labels"])
+    ax.set_ylabel("Probability Density", fontsize=plotting_style["font"]["sizes"]["axis_labels"])
+    ax.set_title("Multi-Project Comparison: Superhuman Coder Achievement", 
+                 fontsize=plotting_style["font"]["sizes"]["title"], pad=10)
+    
+    # Add grid and styling
+    ax.grid(True, alpha=0.2, zorder=0)
+    ax.set_axisbelow(True)
+    ax.spines['top'].set_visible(False)
+    ax.spines['right'].set_visible(False)
+    
+    # Add legend
+    legend = ax.legend(loc='upper left', fontsize=plotting_style["font"]["sizes"]["legend"])
+    for text in legend.get_texts():
+        text.set_fontproperties(fonts['regular_legend'])
+    
+    # Configure ticks
+    ax.tick_params(axis="both", labelsize=plotting_style["font"]["sizes"]["ticks"])
+
+    return fig
 
 if __name__ == "__main__":
     run_multi_project_takeoff_simulation()
