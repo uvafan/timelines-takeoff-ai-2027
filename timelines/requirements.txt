@@ -1,5 +1,0 @@
-numpy>=1.21.0
-matplotlib>=3.4.0
-scipy>=1.7.0
-pyyaml>=5.4.0
-tqdm>=4.61.0 
