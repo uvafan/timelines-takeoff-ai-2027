@@ -3,6 +3,7 @@ import numpy as np
 from scipy.stats import norm, lognorm, gaussian_kde
 import matplotlib.pyplot as plt
 import yaml
+import json
 from pathlib import Path
 from datetime import datetime
 from tqdm import tqdm
@@ -52,7 +53,7 @@ def weighted_geometric_mean(values, weights):
     normalized_weights = [w / weights_sum for w in weights]
     return np.exp(sum(w * np.log(x) for w, x in zip(normalized_weights, values)))
 
-def get_distribution_samples(config: dict, n_sims: int, correlation: float = 0.7) -> dict:
+def get_distribution_samples(config: dict, n_sims: int, correlation: float = 0.7, t_start: float = None) -> dict:
     """Generate correlated samples from all input distributions."""
     # First generate correlated standard normal variables
     n_vars = 3 + len(config["algorithmic_slowdowns"])  # Core params (excluding h_sat, h_SC, d, v_algorithmic vars) + A_values
@@ -100,29 +101,46 @@ def get_distribution_samples(config: dict, n_sims: int, correlation: float = 0.7
     samples["h_SC"] = dist.ppf(np.random.random(n_sims))  # Already in months
 
     # Generate separate correlated samples for progress multipliers
-    n_prog_vars = 2  # v_software_sat, v_software_SC
-    prog_corr_matrix = np.array([[1.0, correlation], [correlation, 1.0]])
+    n_prog_vars = 3  # v_present_day, v_software_sat, v_software_SC
+    prog_corr_matrix = np.array([[1.0, correlation, correlation], 
+                                [correlation, 1.0, correlation], 
+                                [correlation, correlation, 1.0]])
     prog_normal_samples = np.random.multivariate_normal(np.zeros(n_prog_vars), prog_corr_matrix, size=n_sims)
     prog_uniform_samples = norm.cdf(prog_normal_samples)
     
-    # Sample v_software variables with correlation to each other only
-    dist = get_lognormal_from_80_ci(*config["distributions"]["v_algorithmic_sat_ci"])
-    samples["v_software_sat"] = dist.ppf(prog_uniform_samples[:, 0])
+    # Sample present day progress multiplier first
+    dist = get_lognormal_from_80_ci(*config["distributions"]["present_day_prog_multiplier_ci"])
+    samples["v_present_day"] = dist.ppf(prog_uniform_samples[:, 0])
+    
+    # Sample v_software_sat, ensuring it's always greater than present day
+    dist_sat = get_lognormal_from_80_ci(*config["distributions"]["v_algorithmic_sat_ci"])
+    v_sat_raw = dist_sat.ppf(prog_uniform_samples[:, 1])
+    # Ensure v_software_sat > v_present_day
+    samples["v_software_sat"] = np.maximum(samples["v_present_day"], v_sat_raw)
     
     dist = get_lognormal_from_80_ci(*config["distributions"]["v_algorithmic_SC_ci"])
-    samples["v_software_SC"] = dist.ppf(prog_uniform_samples[:, 1])
+    v_sc_raw = dist.ppf(prog_uniform_samples[:, 2])
+    # Ensure v_software_SC > v_software_sat
+    samples["v_software_SC"] = np.maximum(samples["v_software_sat"], v_sc_raw)
 
     # Sample horizon_doubling_time with correlation
     dist = get_lognormal_from_80_ci(*config["distributions"]["horizon_doubling_time_ci"])
     samples["horizon_doubling_time"] = dist.ppf(uniform_samples[:, idx])
     idx += 1
 
-    # Handle t_sat as dates
-    today = datetime.now()
+    # Handle t_sat as dates - use t_start instead of current date
+    if t_start is not None:
+        # Convert t_start to year and month for date calculations
+        start_year = int(t_start)
+        start_month = int((t_start % 1) * 12) + 1
+        reference_date = datetime(start_year, start_month, 1)
+    else:
+        reference_date = datetime.now()
+    
     date1 = datetime.strptime(config["distributions"]["t_sat_ci"][0], "%Y-%m-%d")
     date2 = datetime.strptime(config["distributions"]["t_sat_ci"][1], "%Y-%m-%d")
-    months1 = (date1.year - today.year) * 12 + date1.month - today.month
-    months2 = (date2.year - today.year) * 12 + date2.month - today.month
+    months1 = (date1.year - reference_date.year) * 12 + date1.month - reference_date.month
+    months2 = (date2.year - reference_date.year) * 12 + date2.month - reference_date.month
     
     # Create lognormal distribution for months until saturation
     dist = get_lognormal_from_80_ci(months1, months2)
@@ -275,35 +293,42 @@ def get_labor_growth_rate(t: float, labor_growth_schedule: list) -> float:
             
     return current_rate
 
-def run_single_scenario(samples: dict, params: dict, forecaster_config: dict, simulation_config: dict) -> list[float]:
-    """Run simulation for a single scenario configuration."""
+def run_single_forecaster_simulation(samples: dict, params: dict, forecaster_config: dict, simulation_config: dict) -> tuple[list[float], list[list[float]], list[list[float]]]:
+    """Run simulation for a single forecaster configuration."""
     successful_times = []
+    research_trajectories = []  # Store research stock over time for each simulation
+    time_trajectories = []      # Store corresponding time points
     _, g_SC = calculate_gaps(samples)  # Use sampled h_sat values
     
     # Get software progress share from samples
     software_progress_share = samples["initial_software_progress_share"]
     
-    # Initialize labor-based research variables
-    labor_pool = simulation_config["initial_labor_pool"]
-    research_stock = simulation_config["initial_research_stock"]
-    labor_power = simulation_config["labor_power"]
-    
     for i in tqdm(range(len(samples["horizon_doubling_time"])), desc="Running simulations", leave=False):
-        # Initialize simulation at current time
-        t = params["t_0"] + samples["t_sat"][i]/12  # Convert months to years
+        # First, simulate the pre-saturation period
+        stock_at_sat, labor_pool_at_sat, pre_sat_research_traj, pre_sat_time_traj = simulate_pre_saturation_period(
+            samples, i, params, forecaster_config, simulation_config
+        )
+        
+        # Initialize post-saturation simulation
+        t = params["t_0"] + samples["t_sat"][i]/12 - samples["d"][i]/12  # Convert months to years
         g_t = 0
         
-        # Reset labor and research variables for each simulation
-        current_labor_pool = labor_pool
-        current_research_stock = research_stock
+        # Use the labor pool from pre-saturation simulation
+        current_labor_pool = labor_pool_at_sat
+        current_research_stock = stock_at_sat
         
-        # Run timesteps
+        # Start with the pre-saturation trajectory
+        sim_research_trajectory = pre_sat_research_traj.copy()
+        sim_time_trajectory = pre_sat_time_traj.copy()
+        
+        # Run post-saturation timesteps
         max_time = simulation_config["max_time"]  # Get max_time from simulation config
+        
         for _ in range(params["n_steps"]):
             # Calculate progress fraction
             progress_fraction = g_t / g_SC[i]
             
-            # Calculate software progress rate based on intermediate speedup (interpolate between present and SC rates)
+            # Calculate software progress rate based on intermediate speedup (interpolate between sat and SC rates)
             software_prog_multiplier = (1 + samples["v_software_sat"][i]) * ((1 + samples["v_software_SC"][i])/(1 + samples["v_software_sat"][i])) ** progress_fraction
 
             # Get current labor growth rate from schedule
@@ -317,7 +342,7 @@ def run_single_scenario(samples: dict, params: dict, forecaster_config: dict, si
             current_labor_pool += new_labor
             
             # Calculate research contribution on a yearly basis, then divide
-            research_contribution = ((((current_labor_pool+1) ** labor_power)-1) * software_prog_multiplier) / (250/params["dt"])
+            research_contribution = ((((current_labor_pool+1) ** simulation_config["labor_power"])-1) * software_prog_multiplier) / (250/params["dt"])
 
             # Add to research stock
             new_research_stock = current_research_stock + research_contribution
@@ -342,9 +367,7 @@ def run_single_scenario(samples: dict, params: dict, forecaster_config: dict, si
             g_t += v_t * (params["dt"]/30.5)
             
             if g_t >= g_SC[i]:
-                completion_time = t
-                completion_time -= samples["d"][i]/12  # Convert months to years
-                successful_times.append(completion_time)
+                successful_times.append(t)
                 break
                 
             t += params["dt"]/365  # Convert days to years
@@ -354,10 +377,16 @@ def run_single_scenario(samples: dict, params: dict, forecaster_config: dict, si
                 successful_times.append(max_time)
                 break
             
-            # Update research stock
+            # Update research stock and store trajectory (only if continuing)
             current_research_stock = new_research_stock
+            sim_research_trajectory.append(current_research_stock)
+            sim_time_trajectory.append(t)
+        
+        # Store complete trajectories for this simulation
+        research_trajectories.append(sim_research_trajectory)
+        time_trajectories.append(sim_time_trajectory)
             
-    return successful_times
+    return successful_times, research_trajectories, time_trajectories
 
 def setup_plotting_style(plotting_style: dict):
     """Set up matplotlib style according to config."""
@@ -626,6 +655,8 @@ def create_distribution_plots(all_forecaster_samples: dict, config: dict, plotti
             {"key": "horizon_doubling_time", "unit": "months"},
         "Time to\nSaturation (t_sat)":
             {"key": "t_sat", "unit": "days"},
+        "Software Progress Rate at\nPresent Day (v_present_day)":
+            {"key": "v_present_day", "unit": "x 2024 rate"},
         "Software Progress Rate at\nSaturation (v_software_sat)":
             {"key": "v_software_sat", "unit": "x 2024 rate"},
         "Software Progress Rate at\nSC (v_software_SC)":
@@ -928,7 +959,249 @@ def format_year_month(year_decimal: float, max_time: float) -> str:
                   'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'][month-1]
     return f"{month_name} {year}"
 
-def run_and_plot_are_scenarios(config_path: str = "params.yaml") -> tuple[plt.Figure, plt.Figure, plt.Figure, plt.Figure, dict]:
+def create_research_trajectory_plot(all_forecaster_trajectories: dict, config: dict, plotting_style: dict, fonts: dict) -> plt.Figure:
+    """Create figure showing median research stock trajectory for simulations completing in first half of 2027."""
+    background_color = plotting_style.get("colors", {}).get("background", "#FFFEF8")
+    bg_rgb = tuple(int(background_color.lstrip('#')[i:i+2], 16)/255 for i in (0, 2, 4))
+    
+    fig = plt.figure(figsize=(12, 8), dpi=150, facecolor=bg_rgb)
+    ax = fig.add_subplot(111)
+    ax.set_facecolor(bg_rgb)
+    
+    # Dictionary to store median trajectory data for JSON export
+    trajectory_data = {}
+    
+    # Plot trajectory for each forecaster
+    for forecaster_name, (completion_times, research_trajectories, time_trajectories) in all_forecaster_trajectories.items():
+        # Filter for simulations that complete in first half of 2027
+        filtered_research_trajectories = []
+        filtered_time_trajectories = []
+        
+        for i, completion_time in enumerate(completion_times):
+            if 2027.0 <= completion_time < 2027.5:
+                # Get the full trajectory for this simulation
+                full_research_traj = research_trajectories[i]
+                full_time_traj = time_trajectories[i]
+                
+                filtered_research_trajectories.append(full_research_traj)
+                filtered_time_trajectories.append(full_time_traj)
+        
+        if not filtered_research_trajectories:
+            print(f"No simulations for {forecaster_name} completed in first half of 2027")
+            continue
+            
+        print(f"{forecaster_name}: {len(filtered_research_trajectories)} simulations completed in first half of 2027")
+        
+        # Find the common time grid for interpolation
+        # Get the range of all time points
+        all_times = []
+        for time_traj in filtered_time_trajectories:
+            all_times.extend(time_traj)
+        
+        min_time = min(all_times)
+        max_time = max(all_times)
+        
+        # Create a uniform time grid
+        time_grid = np.linspace(min_time, max_time, 500)
+        
+        # Interpolate each trajectory onto the common time grid
+        interpolated_trajectories = []
+        for research_traj, time_traj in zip(filtered_research_trajectories, filtered_time_trajectories):
+            # Interpolate research stock values onto the time grid
+            interp_research = np.interp(time_grid, time_traj, research_traj)
+            interpolated_trajectories.append(interp_research)
+        
+        # Calculate median and percentiles once
+        interpolated_trajectories = np.array(interpolated_trajectories)
+        median_trajectory = np.median(interpolated_trajectories, axis=0)
+        p25_trajectory = np.percentile(interpolated_trajectories, 25, axis=0)
+        p75_trajectory = np.percentile(interpolated_trajectories, 75, axis=0)
+        
+        # Store median trajectory data for JSON export
+        trajectory_points = []
+        for time_val, median_val, p25_val, p75_val in zip(time_grid, median_trajectory, p25_trajectory, p75_trajectory):
+            trajectory_points.append({
+                "time": float(time_val),
+                "median_research_stock": float(median_val),
+                "p25_research_stock": float(p25_val),
+                "p75_research_stock": float(p75_val)
+            })
+
+        trajectory_data[forecaster_name] = {
+            "trajectory": trajectory_points,
+            "num_simulations": len(filtered_research_trajectories)
+        }
+
+        # Get color from config
+        base_name = forecaster_name.split(" (")[0].lower()
+        color = config["forecasters"][base_name]["color"]
+        
+        # Plot median trajectory
+        ax.plot(time_grid, median_trajectory, '-', color=color, label=f"{forecaster_name} (median)", 
+                linewidth=2.5, alpha=0.9, zorder=2)
+        
+        # Plot percentiles as shaded area (reusing calculated values)
+        ax.fill_between(time_grid, p25_trajectory, p75_trajectory, color=color, alpha=0.2)
+
+    # Save trajectory data to JSON file
+    output_dir = Path("figures")
+    output_dir.mkdir(parents=True, exist_ok=True)
+    
+    with open(output_dir / "research_trajectory_data.json", 'w') as f:
+        json.dump(trajectory_data, f, indent=2)
+    
+    print(f"Saved median trajectory data to {output_dir / 'research_trajectory_data.json'}")
+    
+    # Configure plot styling
+    title = ax.set_title("Research Stock Trajectory\n(Simulations completing Jan-Jun 2027)",
+                 fontsize=plotting_style["font"]["sizes"]["title"],
+                 pad=15)
+    title.set_fontproperties(fonts['regular'])
+    
+    xlabel = ax.set_xlabel("Year", 
+                 fontsize=plotting_style["font"]["sizes"]["axis_labels"],
+                 labelpad=10)
+    xlabel.set_fontproperties(fonts['regular_small'])
+    
+    ylabel = ax.set_ylabel("Research Stock", 
+                  fontsize=plotting_style["font"]["sizes"]["axis_labels"],
+                  labelpad=10)
+    ylabel.set_fontproperties(fonts['regular_small'])
+    
+    # Use scientific notation for y-axis
+    ax.ticklabel_format(style='scientific', axis='y', scilimits=(0,0))
+    
+    # Set x-axis to show years
+    current_year = datetime.now().year
+    x_min = current_year
+    x_max = 2028.0  # End at the end of 2027 / beginning of 2028
+    ax.set_xlim(x_min, x_max)
+    
+    # Create custom x-ticks showing quarters or half-years for better resolution
+    x_ticks = []
+    x_labels = []
+    for year in range(current_year, 2029):
+        if year <= 2027:
+            x_ticks.extend([year, year + 0.5])
+            x_labels.extend([str(year), f"{year}.5"])
+        else:
+            x_ticks.append(year)
+            x_labels.append(str(year))
+    
+    ax.set_xticks(x_ticks)
+    ax.set_xticklabels(x_labels)
+    
+    # Grid and spines
+    ax.grid(True, alpha=0.2, zorder=0)
+    ax.set_axisbelow(True)
+    ax.spines['top'].set_visible(False)
+    ax.spines['right'].set_visible(False)
+    
+    # Add legend
+    legend = ax.legend(loc='upper left', fontsize=plotting_style["font"]["sizes"]["legend"])
+    for text in legend.get_texts():
+        text.set_fontproperties(fonts['regular_legend'])
+    
+    # Configure ticks
+    ax.tick_params(axis="both", 
+                   labelsize=plotting_style["font"]["sizes"]["ticks"])
+    for tick in ax.get_xticklabels() + ax.get_yticklabels():
+        tick.set_fontproperties(fonts['regular_legend'])
+        if tick in ax.get_xticklabels():
+            tick.set_rotation(45)
+    
+    return fig
+
+def simulate_pre_saturation_period(samples: dict, simulation_idx: int, params: dict, 
+                                   forecaster_config: dict, simulation_config: dict) -> tuple[float, float, list[float], list[float]]:
+    """Simulate the pre-saturation period with time-based exponential interpolation between progress multipliers at present day and saturation.
+        This is a simplification but doesn't affect the results much because the multipliers are low.
+    
+    Returns:
+        tuple: (final_research_stock, final_labor_pool, research_trajectory, time_trajectory)
+    """
+    t_start = params["t_0"]
+    t_sat_years = t_start + samples["t_sat"][simulation_idx]/12  # Convert months to years
+    
+    if t_sat_years <= t_start:
+        # No pre-saturation period needed
+        return simulation_config["initial_research_stock"], simulation_config["initial_labor_pool"], [simulation_config["initial_research_stock"]], [t_start]
+    
+    t = t_start
+    current_labor_pool = simulation_config["initial_labor_pool"]
+    current_research_stock = simulation_config["initial_research_stock"]
+    
+    research_trajectory = [current_research_stock]
+    time_trajectory = [t]
+    
+    dt_years = params["dt"] / 365  # Convert days to years
+    
+    while t < t_sat_years:
+        # Simple time-based interpolation fraction
+        time_fraction = (t - t_start) / (t_sat_years - t_start)
+        time_fraction = np.clip(time_fraction, 0, 1)
+        
+        # Exponentially interpolate between present day and saturation progress multipliers
+        v_present = samples["v_present_day"][simulation_idx]
+        v_sat = samples["v_software_sat"][simulation_idx]
+        software_prog_multiplier = (1 + v_present) * ((1 + v_sat)/(1 + v_present)) ** time_fraction
+        
+        # Get current labor growth rate
+        current_labor_growth_rate = get_labor_growth_rate(t, forecaster_config["labor_growth_schedule"])
+        
+        # Convert annual growth rate to daily rate for the time step
+        daily_growth_rate = (1 + current_labor_growth_rate) ** (params["dt"]/250) - 1
+        
+        # Update labor pool
+        new_labor = current_labor_pool * daily_growth_rate
+        current_labor_pool += new_labor
+        
+        # Calculate research contribution
+        labor_power = simulation_config["labor_power"]
+        research_contribution = ((((current_labor_pool+1) ** labor_power)-1) * software_prog_multiplier) / (250/params["dt"])
+        
+        # Update research stock
+        new_research_stock = current_research_stock + research_contribution
+        
+        # Calculate actual growth rate (annualized)
+        actual_growth = (new_research_stock / current_research_stock) ** (250/params["dt"]) - 1
+        
+        # For the first timestep, set baseline growth
+        if len(research_trajectory) == 1:
+            baseline_growth = actual_growth
+        
+        # Calculate adjustment factor based on growth rate ratio
+        if baseline_growth > 0:
+            growth_ratio = np.log(1 + actual_growth) / np.log(1 + baseline_growth)
+        else:
+            growth_ratio = 1.0
+        
+        # Get compute progress rate using compute schedule
+        v_compute = get_v_compute(t, forecaster_config["compute_schedule"])
+        
+        # Get software progress share for this simulation
+        software_progress_share = samples["initial_software_progress_share"][simulation_idx]
+        
+        # Calculate total progress rate using weighted average (though we don't use this for progress tracking in pre-sat)
+        v_t = software_progress_share * growth_ratio + (1 - software_progress_share) * v_compute
+        
+        # Move time forward
+        t += dt_years
+        
+        # Update research stock
+        current_research_stock = new_research_stock
+        
+        # Store trajectory
+        research_trajectory.append(current_research_stock)
+        time_trajectory.append(t)
+        
+        # Safety check to prevent infinite loops
+        if len(time_trajectory) > 50000:  # Roughly 50k days = ~137 years
+            break
+    
+    return current_research_stock, current_labor_pool, research_trajectory, time_trajectory
+
+def run_and_plot_sc_scenarios(config_path: str = "params.yaml") -> tuple[plt.Figure, plt.Figure, plt.Figure, plt.Figure, plt.Figure, dict]:
     """Run SC simulations with different slowdown combinations and plot results for multiple forecasters."""
     print("Loading configuration...")
     # Load configuration
@@ -938,19 +1211,19 @@ def run_and_plot_are_scenarios(config_path: str = "params.yaml") -> tuple[plt.Fi
     # Set up fonts first
     fonts = setup_plotting_style(plotting_style)
     
-    # Get current date as decimal year
-    current_date = datetime.now()
-    current_year_decimal = current_date.year + (current_date.month - 1) / 12 + (current_date.day - 1) / 365.25
+    # Use t_start from configuration instead of current date
+    t_start = config["simulation"]["t_start"]
     
     # Store results for each forecaster
     all_forecaster_headline_results = {}
     all_forecaster_samples = {}
+    all_forecaster_trajectories = {}  # Store trajectory data
     
     # Get shared simulation parameters
     sim_params = {
         "n_steps": config["simulation"]["n_steps"],
         "dt": config["simulation"]["dt"],
-        "t_0": current_year_decimal  # Use exact current date as decimal year
+        "t_0": t_start  # Use t_start from config instead of current date
     }
     
     # Run simulations for each forecaster
@@ -960,12 +1233,13 @@ def run_and_plot_are_scenarios(config_path: str = "params.yaml") -> tuple[plt.Fi
         print(f"\nProcessing {name}'s forecasts...")
         
         # Generate samples
-        samples = get_distribution_samples(forecaster_config, config["simulation"]["n_sims"])
+        samples = get_distribution_samples(forecaster_config, config["simulation"]["n_sims"], t_start=t_start)
         all_forecaster_samples[name] = samples
         
         # Run simulation
-        results = run_single_scenario(samples, sim_params, forecaster_config, config["simulation"])
+        results, research_trajectories, time_trajectories = run_single_forecaster_simulation(samples, sim_params, forecaster_config, config["simulation"])
         all_forecaster_headline_results[name] = results
+        all_forecaster_trajectories[name] = (results, research_trajectories, time_trajectories)
     
     print("\nGenerating plots...")
     # Create plots
@@ -974,9 +1248,10 @@ def run_and_plot_are_scenarios(config_path: str = "params.yaml") -> tuple[plt.Fi
     
     fig_headline = create_headline_plot(all_forecaster_headline_results, bins, bin_width, config, plotting_style, fonts)
     fig_inputs, fig_derived = create_distribution_plots(all_forecaster_samples, config, plotting_style, fonts)
+    fig_research_trajectory = create_research_trajectory_plot(all_forecaster_trajectories, config, plotting_style, fonts)
     
     # Apply tight layout
-    for fig in [fig_headline, fig_inputs, fig_derived]:
+    for fig in [fig_headline, fig_inputs, fig_derived, fig_research_trajectory]:
         fig.tight_layout()
     
     # Create output directory if it doesn't exist
@@ -988,12 +1263,13 @@ def run_and_plot_are_scenarios(config_path: str = "params.yaml") -> tuple[plt.Fi
     fig_headline.savefig(output_dir / "combined_headline.png", dpi=300, bbox_inches="tight")
     fig_inputs.savefig(output_dir / "combined_inputs.png", dpi=300, bbox_inches="tight")
     fig_derived.savefig(output_dir / "combined_derived.png", dpi=300, bbox_inches="tight")
+    fig_research_trajectory.savefig(output_dir / "research_trajectory_2027.png", dpi=300, bbox_inches="tight")
     
     # Close all figures to free memory
     plt.close("all")
     
-    return fig_headline, None, fig_inputs, fig_derived, all_forecaster_headline_results
+    return fig_headline, None, fig_inputs, fig_derived, fig_research_trajectory, all_forecaster_headline_results
 
 if __name__ == "__main__":
-    run_and_plot_are_scenarios()
+    run_and_plot_sc_scenarios()
     print(f"\nSimulation completed at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
