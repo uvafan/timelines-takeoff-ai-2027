@@ -2,7 +2,7 @@ starting_time: "March 31 2027" # Maybe change depending on Plan A scenario timin
 
 # Simulation parameters
 simulation:
-  n_sims: 50 # Should be 5000 for full simulation
+  n_sims: 500 # Should be 5000 for full simulation
   dt: 1  # days
 
 # These are based on the timelines simulation, should change if that changes.
