@@ -1,0 +1,41 @@
+starting_time: "March 31 2027"
+
+# Time gaps between milestones in years
+# Format: [p_zero, lower_bound, upper_bound]
+times:
+  "SC to SAR": [0.15, 1.5, 10]
+  "SAR to SIAR": [0, 2, 250] # currently unused
+  "SIAR to ASI": [0, 3, 500] # currently unused
+  "ASI to WS": [0, 4, 1000] # currently unsused
+
+# Speed multipliers at each milestone
+speedups:
+  SC: 5
+  SAR: 25
+  SIAR: 250
+  ASI: 2000
+  WS: 10000 # currently unused
+
+# Simulation parameters
+simulation:
+  n_sims: 5000 # Should be 5000 for full simulation
+  dt: 1  # days
+
+# Plotting style configuration
+plotting_style:
+  font:
+    family: "monospace"   # Add this line to specify monospace font
+    sizes:
+      axis_labels: 18
+      title: 18
+      main_title: 32
+      ticks: 16
+      legend: 16
+      small: 14
+  
+  colors:
+    background: "#FFFEF8"  # Add this line for cream background (255, 250, 240)
+    human:
+      dark: "#484848"
+      light: "rgb(0, 200, 0, 0.3)"
+    default: "#000000"
