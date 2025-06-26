@@ -395,7 +395,7 @@ def calculate_sc_arrival_year_with_trajectories(samples: dict, current_horizon: 
             # Calculate algorithmic speedup based on intermediate speedup s(interpolate between present and SC rates)
             v_algorithmic = (1 + samples["present_prog_multiplier"][i]) * ((1 + samples["SC_prog_multiplier"][i])/(1 + samples["present_prog_multiplier"][i])) ** progress_fraction
 
-            # adjust algorithmic rate if human alg progress has decreased, in betweene
+            # adjust algorithmic rate if human alg progress has decreased, in between
             if time >= human_alg_progress_decrease_date:
                 only_multiplier = v_algorithmic * 0.5
                 only_additive = v_algorithmic - 0.5
