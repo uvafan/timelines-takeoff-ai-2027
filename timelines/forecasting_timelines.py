@@ -52,10 +52,10 @@ def weighted_geometric_mean(values, weights):
     normalized_weights = [w / weights_sum for w in weights]
     return np.exp(sum(w * np.log(x) for w, x in zip(normalized_weights, values)))
 
-def get_distribution_samples(config: dict, n_sims: int, correlation: float = 0.7) -> dict:
+def get_distribution_samples(config: dict, forecaster_config: dict, n_sims: int, correlation: float = 0.7) -> dict:
     """Generate correlated samples from all input distributions."""
     # First generate correlated standard normal variables
-    n_vars = 3 + len(config["algorithmic_slowdowns"]) + 1  # Core params (excluding h_sat, h_SC, d, v_algorithmic vars) + A_values + superexponential inverse
+    n_vars = 3 + len(forecaster_config["algorithmic_slowdowns"]) + 1  # Core params (excluding h_sat, h_SC, d, v_algorithmic vars) + A_values + superexponential inverse
     
     # Create correlation matrix (all pairs have same correlation)
     corr_matrix = np.full((n_vars, n_vars), correlation)
@@ -74,15 +74,15 @@ def get_distribution_samples(config: dict, n_sims: int, correlation: float = 0.7
     
     # Sample h_sat independently
     dist = get_lognormal_from_80_ci(
-        config["distributions"]["h_sat_ci"][0],  # In hours
-        config["distributions"]["h_sat_ci"][1]
+        forecaster_config["distributions"]["h_sat_ci"][0],  # In hours
+        forecaster_config["distributions"]["h_sat_ci"][1]
     )
     samples["h_sat"] = dist.ppf(np.random.random(n_sims)) / (24 * 30)  # Convert hours to months
     
     # Sample h_SC independently - already in work months
     dist = get_lognormal_from_80_ci(
-        config["distributions"]["h_SC_ci"][0],  # In work months
-        config["distributions"]["h_SC_ci"][1]
+        forecaster_config["distributions"]["h_SC_ci"][0],  # In work months
+        forecaster_config["distributions"]["h_SC_ci"][1]
     )
     samples["h_SC"] = dist.ppf(np.random.random(n_sims))  # Already in months
 
@@ -93,23 +93,25 @@ def get_distribution_samples(config: dict, n_sims: int, correlation: float = 0.7
     prog_uniform_samples = norm.cdf(prog_normal_samples)
     
     # Sample v_algorithmic variables with correlation to each other only
-    dist = get_lognormal_from_80_ci(*config["distributions"]["v_algorithmic_sat_ci"])
+    dist = get_lognormal_from_80_ci(*forecaster_config["distributions"]["v_algorithmic_sat_ci"])
     samples["v_algorithmic_sat"] = dist.ppf(prog_uniform_samples[:, 0])
     
-    dist = get_lognormal_from_80_ci(*config["distributions"]["v_algorithmic_SC_ci"])
+    dist = get_lognormal_from_80_ci(*forecaster_config["distributions"]["v_algorithmic_SC_ci"])
     samples["v_algorithmic_SC"] = dist.ppf(prog_uniform_samples[:, 1])
 
     # Sample T_t with correlation
-    dist = get_lognormal_from_80_ci(*config["distributions"]["T_t_ci"])
+    dist = get_lognormal_from_80_ci(*forecaster_config["distributions"]["T_t_ci"])
     samples["T_t"] = dist.ppf(uniform_samples[:, idx])
     idx += 1
 
     # Handle t_sat as dates
-    today = datetime.now()
-    date1 = datetime.strptime(config["distributions"]["t_sat_ci"][0], "%Y-%m-%d")
-    date2 = datetime.strptime(config["distributions"]["t_sat_ci"][1], "%Y-%m-%d")
-    months1 = (date1.year - today.year) * 12 + date1.month - today.month
-    months2 = (date2.year - today.year) * 12 + date2.month - today.month
+    today_decimal = config["simulation"]["t_0"]
+    today_year = int(today_decimal)
+    today_month = int((today_decimal % 1) * 12) + 1
+    date1 = datetime.strptime(forecaster_config["distributions"]["t_sat_ci"][0], "%Y-%m-%d")
+    date2 = datetime.strptime(forecaster_config["distributions"]["t_sat_ci"][1], "%Y-%m-%d")
+    months1 = (date1.year - today_year) * 12 + date1.month - today_month
+    months2 = (date2.year - today_year) * 12 + date2.month - today_month
     
     # Create lognormal distribution for months until saturation
     dist = get_lognormal_from_80_ci(months1, months2)
@@ -117,23 +119,23 @@ def get_distribution_samples(config: dict, n_sims: int, correlation: float = 0.7
     idx += 1
     
     # Sample d independently
-    dist = get_lognormal_from_80_ci(*config["distributions"]["d_ci"])
+    dist = get_lognormal_from_80_ci(*forecaster_config["distributions"]["d_ci"])
     samples["d"] = dist.ppf(np.random.random(n_sims))  # Already in months
     
     # Add growth type parameters with correlation for superexponential
     growth_type = uniform_samples[:, idx]
-    samples["is_superexponential"] = growth_type < config["distributions"]["p_superexponential"]
-    samples["is_subexponential"] = (growth_type >= config["distributions"]["p_superexponential"]) & (growth_type < (config["distributions"]["p_superexponential"] + config["distributions"]["p_subexponential"]))
+    samples["is_superexponential"] = growth_type < forecaster_config["distributions"]["p_superexponential"]
+    samples["is_subexponential"] = (growth_type >= forecaster_config["distributions"]["p_superexponential"]) & (growth_type < (forecaster_config["distributions"]["p_superexponential"] + forecaster_config["distributions"]["p_subexponential"]))
     samples["is_exponential"] = ~(samples["is_superexponential"] | samples["is_subexponential"])
     idx += 1
     
     # Add growth/decay parameters
-    samples["se_doubling_decay_fraction"] = config["distributions"]["se_doubling_decay_fraction"]
-    samples["sub_doubling_growth_fraction"] = config["distributions"]["sub_doubling_growth_fraction"]
+    samples["se_doubling_decay_fraction"] = forecaster_config["distributions"]["se_doubling_decay_fraction"]
+    samples["sub_doubling_growth_fraction"] = forecaster_config["distributions"]["sub_doubling_growth_fraction"]
     
     # Algorithmic slowdowns with probability of being zero
     samples["A_values"] = {}
-    for name, params in config["algorithmic_slowdowns"].items():
+    for name, params in forecaster_config["algorithmic_slowdowns"].items():
         p_zero, lower, upper = params
         
         # Generate uniform random numbers for determining if slowdown is zero
@@ -837,10 +839,6 @@ def run_and_plot_are_scenarios(config_path: str = "params.yaml") -> tuple[plt.Fi
     # Set up fonts first
     fonts = setup_plotting_style(plotting_style)
     
-    # Get current date as decimal year
-    current_date = datetime.now()
-    current_year_decimal = current_date.year + (current_date.month - 1) / 12 + (current_date.day - 1) / 365.25
-    
     # Store results for each forecaster
     all_forecaster_headline_results = {}
     all_forecaster_samples = {}
@@ -849,7 +847,7 @@ def run_and_plot_are_scenarios(config_path: str = "params.yaml") -> tuple[plt.Fi
     sim_params = {
         "n_steps": config["simulation"]["n_steps"],
         "dt": config["simulation"]["dt"],
-        "t_0": current_year_decimal  # Use exact current date as decimal year
+        "t_0": config["simulation"]["t_0"]  # Use exact current date as decimal year
     }
     
     # Run simulations for each forecaster
@@ -859,7 +857,7 @@ def run_and_plot_are_scenarios(config_path: str = "params.yaml") -> tuple[plt.Fi
         print(f"\nProcessing {name}'s forecasts...")
         
         # Generate samples
-        samples = get_distribution_samples(forecaster_config, config["simulation"]["n_sims"])
+        samples = get_distribution_samples(config, forecaster_config, config["simulation"]["n_sims"])
         all_forecaster_samples[name] = samples
         
         # Run simulation

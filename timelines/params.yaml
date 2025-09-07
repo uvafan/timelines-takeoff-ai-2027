@@ -2,7 +2,7 @@
 simulation:
   n_sims: 5000     # Number of Monte Carlo simulation runs
   n_steps: 30000   # Maximum simulation steps before timeout
-  t_0: 2025        # Starting year for simulation
+  t_0: 2025.25        # Starting year for simulation
   dt: 1.0          # Time step size in days
 
 # Plotting style configuration
