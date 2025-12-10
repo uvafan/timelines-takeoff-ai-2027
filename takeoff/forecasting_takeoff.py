@@ -30,20 +30,28 @@ def get_lognormal_from_80_ci(lower_bound, upper_bound):
     # Return the lognormal distribution
     return lognorm(s=sigma, scale=np.exp(mu))
 
-def get_milestone_samples(config: dict, n_sims: int, correlation: float = 0.7) -> dict:
+def get_milestone_samples(config: dict, n_sims: int) -> dict:
     """Generate samples for milestone timings and speeds with correlation between gap sizes."""
     samples = {}
-    
+
     # Parse starting time
     start_date = datetime.strptime(config["starting_time"], "%B %d %Y")
     samples["start_time"] = start_date
-    
+
+    # Get correlation parameters from config
+    time_gaps_correlation = config["correlations"]["time_gaps"]
+    amr_sar_sc_sar_correlation = config["correlations"]["amr_sar_sc_sar"]
+
+    # Get derived distribution bounds from config
+    amr_to_sar_bounds = config["derived_distributions"]["amr_to_sar"]
+    sar_to_siar_equiv_jumps_bounds = config["derived_distributions"]["sar_to_siar_equiv_jumps"]
+
     # Get list of time gaps to model
     milestone_pairs = list(config["times"].keys())
     n_vars = len(milestone_pairs)
-    
+
     # Create correlation matrix (all pairs have same correlation)
-    corr_matrix = np.full((n_vars, n_vars), correlation)
+    corr_matrix = np.full((n_vars, n_vars), time_gaps_correlation)
     np.fill_diagonal(corr_matrix, 1.0)
     
     # Generate correlated standard normal samples
@@ -54,7 +62,6 @@ def get_milestone_samples(config: dict, n_sims: int, correlation: float = 0.7) -
     uniform_samples = norm.cdf(normal_samples)
     
     # Generate AMR to SAR samples with correlation to SC to SAR
-    amr_sar_sc_sar_correlation = 0.8
     corr_matrix_2 = np.array([[1.0, amr_sar_sc_sar_correlation],
                              [amr_sar_sc_sar_correlation, 1.0]])
     mean_2 = np.zeros(2)
@@ -62,11 +69,11 @@ def get_milestone_samples(config: dict, n_sims: int, correlation: float = 0.7) -
     uniform_samples_corr = norm.cdf(correlated_normal_samples)
     
     # Generate AMR to SAR samples using the correlated uniforms
-    amr_to_sar_dist = get_lognormal_from_80_ci(1, 25)
+    amr_to_sar_dist = get_lognormal_from_80_ci(amr_to_sar_bounds[0], amr_to_sar_bounds[1])
     amr_to_sar_samples = amr_to_sar_dist.ppf(uniform_samples_corr[:, 0])
-    
+
     # Generate SAR to SIAR equivalent jumps samples
-    sar_to_siar_equiv_jumps_dist = get_lognormal_from_80_ci(0.3, 7.5)
+    sar_to_siar_equiv_jumps_dist = get_lognormal_from_80_ci(sar_to_siar_equiv_jumps_bounds[0], sar_to_siar_equiv_jumps_bounds[1])
     sar_to_siar_equiv_jumps_samples = sar_to_siar_equiv_jumps_dist.ppf(np.random.random(n_sims))
     
     # Generate time gap samples
@@ -298,22 +305,30 @@ def create_milestone_timeline_plot(all_milestone_dates: list[list[datetime]], co
         if not visible_data:
             print(f"Warning: No data in visible range for {milestone}")
             continue
-            
-        # Calculate KDE on visible data
-        kde = gaussian_kde(visible_data)
-        
+
         # Create x range for plotting
         x_range = np.linspace(start_year, MAX_GRAPH_YEAR, 200000)
-        density = kde(x_range)
-        
-        # Normalize density to sum to 1 over visible range
-        density = density / np.sum(density) * (len(visible_data) / len(milestone_data))
-        
-        # Plot with different colors for each milestone
         colors = ["#900000", "#004000", "#000090"]
-        ax.plot(x_range, density, '-', color=colors[i], label=milestone,
-                linewidth=2, alpha=0.8, zorder=2)
-        ax.fill_between(x_range, density, color=colors[i], alpha=0.1)
+
+        # Check if data has enough variance for KDE
+        data_std = np.std(visible_data)
+        if data_std < 0.001:
+            # Near-zero variance: plot as vertical line at mean
+            mean_val = np.mean(visible_data)
+            ax.axvline(x=mean_val, color=colors[i], label=milestone,
+                      linewidth=2, alpha=0.8, zorder=2)
+        else:
+            # Calculate KDE on visible data
+            kde = gaussian_kde(visible_data)
+            density = kde(x_range)
+
+            # Normalize density to sum to 1 over visible range
+            density = density / np.sum(density) * (len(visible_data) / len(milestone_data))
+
+            # Plot with different colors for each milestone
+            ax.plot(x_range, density, '-', color=colors[i], label=milestone,
+                    linewidth=2, alpha=0.8, zorder=2)
+            ax.fill_between(x_range, density, color=colors[i], alpha=0.1)
         milestone_full = ["Superhuman\n  AI Researcher", "Superintelligent\n  AI Researcher", "Generally\n  Superintelligent"]
         # Add statistics text using full data with month and year format
         if (p90 > 2100): 

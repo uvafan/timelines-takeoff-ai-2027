@@ -1,9 +1,22 @@
 starting_time: "March 31 2027"
 
+# Correlation parameters for sampling
+correlations:
+  time_gaps: 0.7  # Correlation between time gap sizes
+  amr_sar_sc_sar: 0.8  # Correlation between AMR to SAR and SC to SAR
+
+# Distribution bounds for derived quantities (80% CI)
+# Format: [lower_bound, upper_bound]
+derived_distributions:
+  # amr_to_sar: [1, 25]  # Years from AMR to SAR
+  # sar_to_siar_equiv_jumps: [0.3, 7.5]  # SAR to SIAR equivalent jumps
+  amr_to_sar: [5, 5.001]  # Years from AMR to SAR
+  sar_to_siar_equiv_jumps: [1.5, 1.5001]  # SAR to SIAR equivalent jumps
+
 # Time gaps between milestones in years
 # Format: [p_zero, lower_bound, upper_bound]
 times:
-  "SC to SAR": [0.15, 1.5, 10]
+  "SC to SAR": [0, 3.37, 3.3701]
   "SAR to SIAR": [0, 2, 250] # currently unused
   "SIAR to ASI": [0, 3, 500] # currently unused
   "ASI to WS": [0, 4, 1000] # currently unsused
@@ -18,7 +31,7 @@ speedups:
 
 # Simulation parameters
 simulation:
-  n_sims: 5000 # Should be 5000 for full simulation
+  n_sims: 5 # Should be 5000 for full simulation
   dt: 1  # days
 
 # Plotting style configuration
