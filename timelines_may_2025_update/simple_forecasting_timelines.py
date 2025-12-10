@@ -283,8 +283,9 @@ def calculate_sc_arrival_year(samples: dict, current_horizon: float, dt: float, 
     ending_times = np.zeros(n_sims)
     
     # Get current date as decimal year
-    current_date = datetime.now()
-    current_year = current_date.year + (current_date.month - 1) / 12 + (current_date.day - 1) / 365.25
+    # current_date = datetime.now()
+    # current_year = current_date.year + (current_date.month - 1) / 12 + (current_date.day - 1) / 365.25
+    current_year = 2025.25
     
     # Convert dt from days to months
     dt_in_months = dt / 30.5
@@ -401,7 +402,8 @@ def plot_results(all_forecaster_results: dict, config: dict) -> plt.Figure:
     ax.set_facecolor(bg_rgb)
     
     # Get current year for x-axis range
-    current_year = datetime.now().year
+    # current_year = datetime.now().year
+    current_year = 2025
     x_min = current_year
     x_max = current_year + 11
     
@@ -482,8 +484,9 @@ def run_simple_sc_simulation(config_path: str = "simple_params.yaml") -> tuple[p
     config = load_config(config_path)
     
     # Get current date as decimal year
-    current_date = datetime.now()
-    current_year_decimal = current_date.year + (current_date.month - 1) / 12 + (current_date.day - 1) / 365.25
+    # current_date = datetime.now()
+    # current_year_decimal = current_date.year + (current_date.month - 1) / 12 + (current_date.day - 1) / 365.25
+    current_year_decimal = 2025.25
     
     # Store results for each forecaster
     all_forecaster_results = {}
