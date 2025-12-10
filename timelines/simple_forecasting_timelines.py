@@ -106,6 +106,12 @@ def get_distribution_samples(config: dict, n_sims: int, correlation: float = 0.7
     # Add growth/decay parameters
     samples["se_doubling_decay_fraction"] = config["distributions"]["se_doubling_decay_fraction"]
     samples["sub_doubling_growth_fraction"] = config["distributions"]["sub_doubling_growth_fraction"]
+
+    samples["patch_rd_speedup"] = config.get("patch_rd_speedup", False)
+    if samples["patch_rd_speedup"]:
+        print("Using patched RD speedup")
+    else:
+        print("Using original RD speedup")
     
     return samples
 
@@ -268,8 +274,10 @@ def get_compute_rate(t: float, compute_decrease_date: float) -> float:
     """Calculate compute progress rate based on time."""
     return 0.5 if t >= compute_decrease_date else 1.0
 
-def calculate_sc_arrival_year(samples: dict, current_horizon: float, dt: float, compute_decrease_date: float, human_alg_progress_decrease_date: float, max_simulation_years: float) -> np.ndarray:
+def calculate_sc_arrival_year(samples: dict, current_horizon: float, dt: float, compute_decrease_date: float, human_alg_progress_decrease_date: float, max_simulation_years: float, forecaster_config: dict = None) -> np.ndarray:
     """Calculate time to reach SC incorporating intermediate speedups and compute scaling."""
+    if forecaster_config is None:
+        forecaster_config = {}
     # First calculate base time including cost-and-speed adjustment
     base_time_in_months, _ = calculate_base_time(samples, current_horizon)
     n_sims = len(base_time_in_months)
@@ -298,7 +306,10 @@ def calculate_sc_arrival_year(samples: dict, current_horizon: float, dt: float, 
             progress_fraction = progress / base_time_in_months[i]
             
             # Calculate algorithmic speedup based on intermediate speedup s(interpolate between present and SC rates)
-            v_algorithmic = (1 + samples["present_prog_multiplier"][i]) * ((1 + samples["SC_prog_multiplier"][i])/(1 + samples["present_prog_multiplier"][i])) ** progress_fraction
+            if samples["patch_rd_speedup"]:
+                v_algorithmic = 1 + (samples["present_prog_multiplier"][i]) * ((samples["SC_prog_multiplier"][i])/(samples["present_prog_multiplier"][i])) ** progress_fraction
+            else:
+                v_algorithmic = (1 + samples["present_prog_multiplier"][i]) * ((1 + samples["SC_prog_multiplier"][i])/(1 + samples["present_prog_multiplier"][i])) ** progress_fraction
 
             # adjust algorithmic rate if human alg progress has decreased, in betweene
             if time >= human_alg_progress_decrease_date:
@@ -325,8 +336,10 @@ def calculate_sc_arrival_year(samples: dict, current_horizon: float, dt: float, 
     return ending_times
 
 
-def calculate_sc_arrival_year_with_trajectories(samples: dict, current_horizon: float, dt: float, compute_decrease_date: float, human_alg_progress_decrease_date: float, max_simulation_years: float) -> tuple[np.ndarray, list]:
+def calculate_sc_arrival_year_with_trajectories(samples: dict, current_horizon: float, dt: float, compute_decrease_date: float, human_alg_progress_decrease_date: float, max_simulation_years: float, forecaster_config: dict = None) -> tuple[np.ndarray, list]:
     """Calculate time to reach SC incorporating intermediate speedups and compute scaling, returning both ending times and trajectories."""
+    if forecaster_config is None:
+        forecaster_config = {}
     # First calculate base time including cost-and-speed adjustment and get horizon mappings
     base_time_in_months, horizon_mappings = calculate_base_time(samples, current_horizon)
     n_sims = len(base_time_in_months)
@@ -393,7 +406,10 @@ def calculate_sc_arrival_year_with_trajectories(samples: dict, current_horizon: 
             trajectory.append((time+samples["announcement_delay"][i]/12, current_horizon_minutes))
             
             # Calculate algorithmic speedup based on intermediate speedup s(interpolate between present and SC rates)
-            v_algorithmic = (1 + samples["present_prog_multiplier"][i]) * ((1 + samples["SC_prog_multiplier"][i])/(1 + samples["present_prog_multiplier"][i])) ** progress_fraction
+            if samples["patch_rd_speedup"]:
+                v_algorithmic = 1 + (samples["present_prog_multiplier"][i]) * ((samples["SC_prog_multiplier"][i])/(samples["present_prog_multiplier"][i])) ** progress_fraction
+            else:
+                v_algorithmic = (1 + samples["present_prog_multiplier"][i]) * ((1 + samples["SC_prog_multiplier"][i])/(1 + samples["present_prog_multiplier"][i])) ** progress_fraction
 
             # adjust algorithmic rate if human alg progress has decreased, in between
             if time >= human_alg_progress_decrease_date:

@@ -312,7 +312,12 @@ def calculate_sc_arrival_year(samples: dict, current_horizon: float, dt: float, 
             progress_fraction = progress / base_time_in_months[i]
             
             # Calculate software speedup based on intermediate speedup s(interpolate between present and SC rates)
+            # if forecaster_config.get("patch_rd_speedup", False):
+            #     software_prog_multiplier = 1 + (samples["present_prog_multiplier"][i]) * ((samples["SC_prog_multiplier"][i])/(samples["present_prog_multiplier"][i])) ** progress_fraction
+            # else:
+            #     software_prog_multiplier = (1 + samples["present_prog_multiplier"][i]) * ((1 + samples["SC_prog_multiplier"][i])/(1 + samples["present_prog_multiplier"][i])) ** progress_fraction
             software_prog_multiplier = (1 + samples["present_prog_multiplier"][i]) * ((1 + samples["SC_prog_multiplier"][i])/(1 + samples["present_prog_multiplier"][i])) ** progress_fraction
+
 
             # Get current labor growth rate from schedule
             current_labor_growth_rate = get_labor_growth_rate(time, forecaster_config["labor_growth_schedule"])

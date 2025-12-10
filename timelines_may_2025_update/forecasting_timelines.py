@@ -182,7 +182,13 @@ def get_distribution_samples(config: dict, n_sims: int, correlation: float = 0.7
     
     # Add subexponential growth parameter
     samples["sub_doubling_growth_fraction"] = config["distributions"]["sub_doubling_growth_fraction"]
-    
+
+    samples["patch_rd_speedup"] = config.get("patch_rd_speedup", False)
+    if samples["patch_rd_speedup"]:
+        print("Using patched RD speedup")
+    else:
+        print("Using original RD speedup")
+
     # Algorithmic slowdowns with probability of being zero
     samples["A_values"] = {}
     for name, params in config["algorithmic_slowdowns"].items():
@@ -329,7 +335,10 @@ def run_single_forecaster_simulation(samples: dict, params: dict, forecaster_con
             progress_fraction = g_t / g_SC[i]
             
             # Calculate software progress rate based on intermediate speedup (interpolate between sat and SC rates)
-            software_prog_multiplier = (1 + samples["v_software_sat"][i]) * ((1 + samples["v_software_SC"][i])/(1 + samples["v_software_sat"][i])) ** progress_fraction
+            if samples["patch_rd_speedup"]:
+                software_prog_multiplier = 1 + (samples["v_software_sat"][i]) * ((samples["v_software_SC"][i])/(samples["v_software_sat"][i])) ** progress_fraction
+            else:
+                software_prog_multiplier = (1 + samples["v_software_sat"][i]) * ((1 + samples["v_software_SC"][i])/(1 + samples["v_software_sat"][i])) ** progress_fraction
 
             # Get current labor growth rate from schedule
             current_labor_growth_rate = get_labor_growth_rate(t, forecaster_config["labor_growth_schedule"])
@@ -1144,8 +1153,11 @@ def simulate_pre_saturation_period(samples: dict, simulation_idx: int, params: d
         # Exponentially interpolate between present day and saturation progress multipliers
         v_present = samples["v_present_day"][simulation_idx]
         v_sat = samples["v_software_sat"][simulation_idx]
-        software_prog_multiplier = (1 + v_present) * ((1 + v_sat)/(1 + v_present)) ** time_fraction
-        
+        if samples["patch_rd_speedup"]:
+            software_prog_multiplier = 1 + v_present * (v_sat/v_present) ** time_fraction
+        else:
+            software_prog_multiplier = (1 + v_present) * ((1 + v_sat)/(1 + v_present)) ** time_fraction
+
         # Get current labor growth rate
         current_labor_growth_rate = get_labor_growth_rate(t, forecaster_config["labor_growth_schedule"])
         
