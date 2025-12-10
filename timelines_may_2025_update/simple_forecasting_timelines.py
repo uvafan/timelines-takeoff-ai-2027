@@ -137,7 +137,13 @@ def get_distribution_samples(config: dict, n_sims: int, correlation: float = 0.7
     
     # Add subexponential growth parameter
     samples["sub_doubling_growth_fraction"] = config["distributions"]["sub_doubling_growth_fraction"]
-    
+
+    samples["patch_rd_speedup"] = config.get("patch_rd_speedup", False)
+    if samples["patch_rd_speedup"]:
+        print("Using patched RD speedup")
+    else:
+        print("Using original RD speedup")
+
     return samples
 
 def calculate_base_time(samples: dict, current_horizon: float) -> np.ndarray:
@@ -313,11 +319,10 @@ def calculate_sc_arrival_year(samples: dict, current_horizon: float, dt: float, 
             progress_fraction = progress / base_time_in_months[i]
             
             # Calculate software speedup based on intermediate speedup s(interpolate between present and SC rates)
-            # if forecaster_config.get("patch_rd_speedup", False):
-            #     software_prog_multiplier = 1 + (samples["present_prog_multiplier"][i]) * ((samples["SC_prog_multiplier"][i])/(samples["present_prog_multiplier"][i])) ** progress_fraction
-            # else:
-            #     software_prog_multiplier = (1 + samples["present_prog_multiplier"][i]) * ((1 + samples["SC_prog_multiplier"][i])/(1 + samples["present_prog_multiplier"][i])) ** progress_fraction
-            software_prog_multiplier = (1 + samples["present_prog_multiplier"][i]) * ((1 + samples["SC_prog_multiplier"][i])/(1 + samples["present_prog_multiplier"][i])) ** progress_fraction
+            if samples["patch_rd_speedup"]:
+                software_prog_multiplier = 1 + (samples["present_prog_multiplier"][i]) * ((samples["SC_prog_multiplier"][i])/(samples["present_prog_multiplier"][i])) ** progress_fraction
+            else:
+                software_prog_multiplier = (1 + samples["present_prog_multiplier"][i]) * ((1 + samples["SC_prog_multiplier"][i])/(1 + samples["present_prog_multiplier"][i])) ** progress_fraction
 
 
             # Get current labor growth rate from schedule
