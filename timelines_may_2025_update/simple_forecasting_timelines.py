@@ -137,7 +137,13 @@ def get_distribution_samples(config: dict, n_sims: int, correlation: float = 0.7
     
     # Add subexponential growth parameter
     samples["sub_doubling_growth_fraction"] = config["distributions"]["sub_doubling_growth_fraction"]
-    
+
+    samples["patch_rd_speedup"] = config.get("patch_rd_speedup", False)
+    if samples["patch_rd_speedup"]:
+        print("Using patched RD speedup")
+    else:
+        print("Using original RD speedup")
+
     return samples
 
 def calculate_base_time(samples: dict, current_horizon: float) -> np.ndarray:
@@ -283,8 +289,9 @@ def calculate_sc_arrival_year(samples: dict, current_horizon: float, dt: float, 
     ending_times = np.zeros(n_sims)
     
     # Get current date as decimal year
-    current_date = datetime.now()
-    current_year = current_date.year + (current_date.month - 1) / 12 + (current_date.day - 1) / 365.25
+    # current_date = datetime.now()
+    # current_year = current_date.year + (current_date.month - 1) / 12 + (current_date.day - 1) / 365.25
+    current_year = 2025.25
     
     # Convert dt from days to months
     dt_in_months = dt / 30.5
@@ -312,7 +319,11 @@ def calculate_sc_arrival_year(samples: dict, current_horizon: float, dt: float, 
             progress_fraction = progress / base_time_in_months[i]
             
             # Calculate software speedup based on intermediate speedup s(interpolate between present and SC rates)
-            software_prog_multiplier = (1 + samples["present_prog_multiplier"][i]) * ((1 + samples["SC_prog_multiplier"][i])/(1 + samples["present_prog_multiplier"][i])) ** progress_fraction
+            if samples["patch_rd_speedup"]:
+                software_prog_multiplier = 1 + (samples["present_prog_multiplier"][i]) * ((samples["SC_prog_multiplier"][i])/(samples["present_prog_multiplier"][i])) ** progress_fraction
+            else:
+                software_prog_multiplier = (1 + samples["present_prog_multiplier"][i]) * ((1 + samples["SC_prog_multiplier"][i])/(1 + samples["present_prog_multiplier"][i])) ** progress_fraction
+
 
             # Get current labor growth rate from schedule
             current_labor_growth_rate = get_labor_growth_rate(time, forecaster_config["labor_growth_schedule"])
@@ -396,7 +407,8 @@ def plot_results(all_forecaster_results: dict, config: dict) -> plt.Figure:
     ax.set_facecolor(bg_rgb)
     
     # Get current year for x-axis range
-    current_year = datetime.now().year
+    # current_year = datetime.now().year
+    current_year = 2025
     x_min = current_year
     x_max = current_year + 11
     
@@ -477,8 +489,9 @@ def run_simple_sc_simulation(config_path: str = "simple_params.yaml") -> tuple[p
     config = load_config(config_path)
     
     # Get current date as decimal year
-    current_date = datetime.now()
-    current_year_decimal = current_date.year + (current_date.month - 1) / 12 + (current_date.day - 1) / 365.25
+    # current_date = datetime.now()
+    # current_year_decimal = current_date.year + (current_date.month - 1) / 12 + (current_date.day - 1) / 365.25
+    current_year_decimal = 2025.25
     
     # Store results for each forecaster
     all_forecaster_results = {}

@@ -132,7 +132,13 @@ def get_distribution_samples(config: dict, forecaster_config: dict, n_sims: int,
     # Add growth/decay parameters
     samples["se_doubling_decay_fraction"] = forecaster_config["distributions"]["se_doubling_decay_fraction"]
     samples["sub_doubling_growth_fraction"] = forecaster_config["distributions"]["sub_doubling_growth_fraction"]
-    
+
+    samples["patch_rd_speedup"] = forecaster_config.get("patch_rd_speedup", False)
+    if samples["patch_rd_speedup"]:
+        print("Using patched RD speedup")
+    else:
+        print("Using original RD speedup")
+
     # Algorithmic slowdowns with probability of being zero
     samples["A_values"] = {}
     for name, params in forecaster_config["algorithmic_slowdowns"].items():
@@ -222,8 +228,11 @@ def run_single_scenario(samples: dict, params: dict) -> list[float]:
         max_time = 2050.0  # Maximum time to simulate to
         for _ in range(params["n_steps"]):
             # Calculate algorithmic progress rate - add 1 to both rates since they're now lognormal offsets
-            v_algorithmic = (1 + samples["v_algorithmic_sat"][i]) * ((1 + samples["v_algorithmic_SC"][i])/(1 + samples["v_algorithmic_sat"][i])) ** (g_t / g_SC[i])
-            
+            if samples["patch_rd_speedup"]:
+                v_algorithmic = 1 + (samples["v_algorithmic_sat"][i]) * ((samples["v_algorithmic_SC"][i])/(samples["v_algorithmic_sat"][i])) ** (g_t / g_SC[i])
+            else:
+                v_algorithmic = (1 + samples["v_algorithmic_sat"][i]) * ((1 + samples["v_algorithmic_SC"][i])/(1 + samples["v_algorithmic_sat"][i])) ** (g_t / g_SC[i])
+
             # adjust algorithmic rate if human alg progress has decreased, in betweene
             if t >= 2029:
                 only_multiplier = v_algorithmic * 0.5

@@ -135,7 +135,8 @@ def get_distribution_samples(config: dict, n_sims: int, correlation: float = 0.7
         start_month = int((t_start % 1) * 12) + 1
         reference_date = datetime(start_year, start_month, 1)
     else:
-        reference_date = datetime.now()
+        # reference_date = datetime.now()
+        reference_date = datetime(2025, 3, 1)
     
     date1 = datetime.strptime(config["distributions"]["t_sat_ci"][0], "%Y-%m-%d")
     date2 = datetime.strptime(config["distributions"]["t_sat_ci"][1], "%Y-%m-%d")
@@ -182,7 +183,13 @@ def get_distribution_samples(config: dict, n_sims: int, correlation: float = 0.7
     
     # Add subexponential growth parameter
     samples["sub_doubling_growth_fraction"] = config["distributions"]["sub_doubling_growth_fraction"]
-    
+
+    samples["patch_rd_speedup"] = config.get("patch_rd_speedup", False)
+    if samples["patch_rd_speedup"]:
+        print("Using patched RD speedup")
+    else:
+        print("Using original RD speedup")
+
     # Algorithmic slowdowns with probability of being zero
     samples["A_values"] = {}
     for name, params in config["algorithmic_slowdowns"].items():
@@ -329,7 +336,10 @@ def run_single_forecaster_simulation(samples: dict, params: dict, forecaster_con
             progress_fraction = g_t / g_SC[i]
             
             # Calculate software progress rate based on intermediate speedup (interpolate between sat and SC rates)
-            software_prog_multiplier = (1 + samples["v_software_sat"][i]) * ((1 + samples["v_software_SC"][i])/(1 + samples["v_software_sat"][i])) ** progress_fraction
+            if samples["patch_rd_speedup"]:
+                software_prog_multiplier = 1 + (samples["v_software_sat"][i]) * ((samples["v_software_SC"][i])/(samples["v_software_sat"][i])) ** progress_fraction
+            else:
+                software_prog_multiplier = (1 + samples["v_software_sat"][i]) * ((1 + samples["v_software_SC"][i])/(1 + samples["v_software_sat"][i])) ** progress_fraction
 
             # Get current labor growth rate from schedule
             current_labor_growth_rate = get_labor_growth_rate(t, forecaster_config["labor_growth_schedule"])
@@ -430,10 +440,11 @@ def create_headline_plot(all_forecaster_results: dict[str, list[float]], bins: n
     ax.set_facecolor(bg_rgb)
     
     # Get current year for x-axis range
-    current_year = datetime.now().year
+    # current_year = datetime.now().year
+    current_year = 2025
     x_min = current_year
     x_max = current_year + 11  # Show 11 years into the future
-    
+
     for name, results in all_forecaster_results.items():
         # Get the base name without any parenthetical text for config lookup
         base_name = name.split(" (")[0].lower()
@@ -531,10 +542,11 @@ def create_scenario_plots(all_forecaster_scenarios: dict[str, list[list[float]]]
     axes = gs.subplots()
 
     # Get current year for x-axis range
-    current_year = datetime.now().year
+    # current_year = datetime.now().year
+    current_year = 2025
     x_min = current_year
     x_max = current_year + 11  # Show 11 years into the future
-    
+
     # Update suptitle with direct fontsize and font
     title = plt.suptitle("Date when SC milestone is reached internally",
                  fontsize=plotting_style["font"]["sizes"]["main_title"],
@@ -810,8 +822,9 @@ def plot_multi_distribution(ax: plt.Axes, name: str, info: dict,
         ax.xaxis.set_minor_formatter(plt.NullFormatter())
     
     # Get current year for x-axis range if needed
-    current_year = datetime.now().year
-    
+    # current_year = datetime.now().year
+    current_year = 2025
+
     # Plot distribution for each forecaster
     for forecaster_name, samples in all_forecaster_samples.items():
         # Get the base name without any parenthetical text for config lookup
@@ -832,9 +845,10 @@ def plot_multi_distribution(ax: plt.Axes, name: str, info: dict,
         # For t_sat, convert to actual dates
         if is_t_sat:
             data = data / 12
-            current_date = datetime.now()
-            current_year = current_date.year
-            current_month = current_date.month
+            # current_date = datetime.now()
+            # current_year = current_date.year
+            # current_month = current_date.month
+            current_year = 2025
             data = current_year + data
         
         # Plot the distribution
@@ -1072,7 +1086,8 @@ def create_research_trajectory_plot(all_forecaster_trajectories: dict, config: d
     ax.ticklabel_format(style='scientific', axis='y', scilimits=(0,0))
     
     # Set x-axis to show years
-    current_year = datetime.now().year
+    # current_year = datetime.now().year
+    current_year = 2025
     x_min = current_year
     x_max = 2028.0  # End at the end of 2027 / beginning of 2028
     ax.set_xlim(x_min, x_max)
@@ -1144,8 +1159,11 @@ def simulate_pre_saturation_period(samples: dict, simulation_idx: int, params: d
         # Exponentially interpolate between present day and saturation progress multipliers
         v_present = samples["v_present_day"][simulation_idx]
         v_sat = samples["v_software_sat"][simulation_idx]
-        software_prog_multiplier = (1 + v_present) * ((1 + v_sat)/(1 + v_present)) ** time_fraction
-        
+        if samples["patch_rd_speedup"]:
+            software_prog_multiplier = 1 + v_present * (v_sat/v_present) ** time_fraction
+        else:
+            software_prog_multiplier = (1 + v_present) * ((1 + v_sat)/(1 + v_present)) ** time_fraction
+
         # Get current labor growth rate
         current_labor_growth_rate = get_labor_growth_rate(t, forecaster_config["labor_growth_schedule"])
         
