@@ -33,6 +33,9 @@ def get_lognormal_from_80_ci(lower_bound, upper_bound):
 def get_milestone_samples(config: dict, n_sims: int) -> dict:
     """Generate samples for milestone timings and speeds with correlation between gap sizes."""
     samples = {}
+    seed = config.get("simulation", {}).get("seed")
+    if seed is not None:
+        np.random.seed(int(seed))
 
     # Parse starting time
     start_date = datetime.strptime(config["starting_time"], "%B %d %Y")
