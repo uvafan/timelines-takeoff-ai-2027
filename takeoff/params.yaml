@@ -31,6 +31,7 @@ speedups:
 simulation:
   n_sims: 5000 # Should be 5000 for full simulation
   dt: 1  # days
+  seed: null  # set integer for reproducible Monte Carlo draws
 
 # Plotting style configuration
 plotting_style:
